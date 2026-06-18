@@ -19,8 +19,17 @@
 
 ```text
 experts/IDC_D.mq4                  MT4 EA source
+experts/IDC_D.ex4                  MT4 compiled EA binary
 simulation/idc_d_simulator.py      독립 시뮬레이션/검증 도구
 simulation/reports/*.md            생성된 검증 리포트
+```
+
+## MT4 컴파일 결과
+
+`experts/IDC_D.ex4`는 Wine 환경에서 Pepperstone MT4의 `metaeditor.exe`로 직접 컴파일했습니다.
+
+```text
+Result: 0 errors, 0 warnings
 ```
 
 ## 기본 검증 결과
