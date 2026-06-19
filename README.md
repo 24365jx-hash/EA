@@ -13,6 +13,9 @@
 - 가격이 진입가에서 `LockProfitTriggerPoints` 만큼 유리하게 이동하면 SL을 즉시 `LockProfitPoints` 위치로 이동
 - 이후 `TrailStepPoints` 단위로 SL을 추격
 - 정규 진입, 당일 보조 진입, 최종 1일 1회 방향성 진입 엔진
+- 당일 손실 거래 1회 발생 시 신규 진입 중단
+- 같은 방향 손실 후 당일 같은 방향 재진입 차단
+- M5 EMA 기울기/되돌림 필터로 고점 이후 꺾이는 BUY, 저점 이후 꺾이는 SELL 억제
 - 차트 상태 패널과 진입 차단 사유 표시
 - 마틴게일, 물타기, 그리드 금지
 - 일일 손실 제한은 Balance 기준 `%` 입력값으로 제어
@@ -34,24 +37,26 @@ simulation/reports/*.md            생성된 검증 리포트
 Result: 0 errors, 0 warnings
 ```
 
-## v2.0 기본 검증 결과
+## v2.1 기본 검증 결과
 
 공개 데이터 제약 때문에 브로커 XAUUSD tick 데이터가 아닌 Yahoo Finance `GC=F` 데이터를 GOLD 프록시로 사용했습니다.
 
 - 8일 1분 프록시: PASS
   - 8 활성일 중 7일 거래
-  - 7일 20핍 잠금
-  - 승률 70.0%
-  - Profit Factor 1.45
-  - 순 포인트 +450
-  - 최대 폐쇄거래 DD 505포인트
+  - 5일 20핍 잠금
+  - 승률 71.4%
+  - Profit Factor 1.46
+  - 순 포인트 +355
+  - 최대 폐쇄거래 DD 385포인트
+  - 최악 일일 손익 -385포인트
 - 60일 5분 프록시: PASS
   - 50 활성일 중 50일 거래
-  - 45일 20핍 잠금
-  - 승률 57.7%
-  - Profit Factor 1.62
-  - 순 포인트 +6,820
-  - 최대 폐쇄거래 DD 2,805포인트
+  - 31일 20핍 잠금
+  - 승률 62.0%
+  - Profit Factor 2.01
+  - 순 포인트 +6,450
+  - 최대 폐쇄거래 DD 2,010포인트
+  - 최악 일일 손익 -335포인트
 
 최종 실거래 전에는 반드시 사용 브로커의 MT4 Strategy Tester에서 XAUUSD M1 고품질 히스토리로 재검증해야 합니다.
 
@@ -61,14 +66,14 @@ Result: 0 errors, 0 warnings
 
 ```bash
 python3 simulation/idc_d_simulator.py --range 8d --interval 1m \
-  --report simulation/reports/idc_d_validation_v2_8d_1m_proxy.md
+  --report simulation/reports/idc_d_validation_v21_8d_1m_proxy.md
 ```
 
 공개 GC=F 5분 장기 프록시:
 
 ```bash
 python3 simulation/idc_d_simulator.py --range 60d --interval 5m \
-  --report simulation/reports/idc_d_validation_v2_60d_5m_proxy.md
+  --report simulation/reports/idc_d_validation_v21_60d_5m_proxy.md
 ```
 
 MT4에서 내보낸 XAUUSD M1 CSV:
@@ -81,7 +86,7 @@ python3 simulation/idc_d_simulator.py --csv path/to/XAUUSD_M1.csv \
 기본값 고정 검증 요약:
 
 ```text
-simulation/reports/idc_d_v2_default_validation.md
+simulation/reports/idc_d_v21_default_validation.md
 ```
 
 ## EA 설치

@@ -5,8 +5,8 @@
 #property strict
 #property copyright "IDC_D"
 #property link      ""
-#property version   "2.00"
-#property description "GOLD-only M1/M5 EA with daily entry engine, 20-pip lock, and step trailing."
+#property version   "2.10"
+#property description "GOLD-only M1/M5 EA with daily entry engine, anti-repeat-loss guards, 20-pip lock, and step trailing."
 
 #define EA_NAME "IDC_D"
 
@@ -19,7 +19,7 @@ input bool   UseFixedLot              = false;
 input double FixedLot                 = 0.01;
 input double RiskPercentPerTrade      = 1.00;
 
-input int    InitialSLPoints          = 300;
+input int    InitialSLPoints          = 350;
 input int    LockProfitTriggerPoints  = 200;
 input int    LockProfitPoints         = 200;
 input int    TrailStepPoints          = 50;
@@ -29,6 +29,8 @@ input int    SlippagePoints           = 30;
 
 input double MaxDailyLossPercent      = 5.00;
 input int    MaxTradesPerDay          = 3;
+input int    MaxLossTradesPerDay      = 1;
+input bool   BlockSameDirectionAfterLoss = true;
 input bool   StopAfterDailyLock       = true;
 input int    CooldownBars             = 10;
 
@@ -43,14 +45,16 @@ input int    NewsBlockEndHour         = 0;
 
 input int    M5FastEMA                = 12;
 input int    M5SlowEMA                = 36;
-input int    M1FastEMA                = 3;
-input int    M1SlowEMA                = 9;
+input int    M1FastEMA                = 8;
+input int    M1SlowEMA                = 21;
 input int    RSIPeriod                = 14;
 input double RSIBuyMin                = 50.0;
 input double RSISellMax               = 50.0;
 input int    M5ATRPeriod              = 14;
 input int    ATRMinPoints             = 20;
 input int    ATRMaxPoints             = 600;
+input int    MinM5SlopePoints         = 10;
+input int    MaxM5PullbackPoints      = 120;
 
 input bool   UseDailyProbe            = true;
 input int    DailyProbeStartHour      = 6;
@@ -249,6 +253,12 @@ bool CanOpenNewTrade()
       return(false);
    }
 
+   if(MaxLossTradesPerDay > 0 && CountTodayLossTrades() >= MaxLossTradesPerDay)
+   {
+      SetBlockedReason("Max daily loss trades reached");
+      return(false);
+   }
+
    if(StopAfterDailyLock && IsDailyLockReached())
    {
       SetBlockedReason("Daily 200-point lock reached");
@@ -292,6 +302,10 @@ int GetEntrySignal()
    double point = MarketInfo(TradeSymbol, MODE_POINT);
    double m5Fast = iMA(TradeSymbol, PERIOD_M5, M5FastEMA, 0, MODE_EMA, PRICE_CLOSE, 1);
    double m5Slow = iMA(TradeSymbol, PERIOD_M5, M5SlowEMA, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double m5FastPrev = iMA(TradeSymbol, PERIOD_M5, M5FastEMA, 0, MODE_EMA, PRICE_CLOSE, 2);
+   double m5SlowPrev = iMA(TradeSymbol, PERIOD_M5, M5SlowEMA, 0, MODE_EMA, PRICE_CLOSE, 2);
+   double m5Close = iClose(TradeSymbol, PERIOD_M5, 1);
+   double m5ClosePrev = iClose(TradeSymbol, PERIOD_M5, 2);
    double m5AtrPoints = iATR(TradeSymbol, PERIOD_M5, M5ATRPeriod, 1) / point;
    if(m5AtrPoints < ATRMinPoints || m5AtrPoints > ATRMaxPoints)
    {
@@ -320,15 +334,19 @@ int GetEntrySignal()
 
    bool m5Up = (m5Fast > m5Slow);
    bool m5Down = (m5Fast < m5Slow);
+   bool m5Rising = (m5Fast >= m5FastPrev + MinM5SlopePoints * point && m5Slow >= m5SlowPrev && m5Close >= m5ClosePrev);
+   bool m5Falling = (m5Fast <= m5FastPrev - MinM5SlopePoints * point && m5Slow <= m5SlowPrev && m5Close <= m5ClosePrev);
    bool m1Up = (fastNow > slowNow);
    bool m1Down = (fastNow < slowNow);
    bool strongOppositeForBuy = (m5Down && m1Close < m5Slow);
    bool strongOppositeForSell = (m5Up && m1Close > m5Slow);
+   bool buyTrendHealthy = (m5Up && m5Rising && m1Close >= m5Fast - MaxM5PullbackPoints * point);
+   bool sellTrendHealthy = (m5Down && m5Falling && m1Close <= m5Fast + MaxM5PullbackPoints * point);
    bool neutralRsi = (rsiNow >= NeutralRSILow && rsiNow <= NeutralRSIHigh);
 
    bool buyPullbackResume = (
       normalSpread
-      && m5Up
+      && buyTrendHealthy
       && m1Up
       && rsiNow >= RSIBuyMin
       && m1Close > m1Open
@@ -337,7 +355,7 @@ int GetEntrySignal()
    );
    bool sellPullbackResume = (
       normalSpread
-      && m5Down
+      && sellTrendHealthy
       && m1Down
       && rsiNow <= RSISellMax
       && m1Close < m1Open
@@ -347,12 +365,24 @@ int GetEntrySignal()
 
    if(buyPullbackResume)
    {
+      if(IsSameDirectionLossBlocked(OP_BUY))
+      {
+         LastEntryMode = "BUY_BLOCKED_AFTER_LOSS";
+         SetBlockedReason("BUY blocked after same-direction loss");
+         return(-1);
+      }
       LastEntryMode = "TREND_PULLBACK_BUY";
       SetBlockedReason("Signal ready");
       return(OP_BUY);
    }
    if(sellPullbackResume)
    {
+      if(IsSameDirectionLossBlocked(OP_SELL))
+      {
+         LastEntryMode = "SELL_BLOCKED_AFTER_LOSS";
+         SetBlockedReason("SELL blocked after same-direction loss");
+         return(-1);
+      }
       LastEntryMode = "TREND_PULLBACK_SELL";
       SetBlockedReason("Signal ready");
       return(OP_SELL);
@@ -377,12 +407,24 @@ int GetEntrySignal()
 
       if(buyProbe)
       {
+         if(IsSameDirectionLossBlocked(OP_BUY))
+         {
+            LastEntryMode = "BUY_BLOCKED_AFTER_LOSS";
+            SetBlockedReason("BUY blocked after same-direction loss");
+            return(-1);
+         }
          LastEntryMode = "DAILY_PROBE_BUY";
          SetBlockedReason("Signal ready");
          return(OP_BUY);
       }
       if(sellProbe)
       {
+         if(IsSameDirectionLossBlocked(OP_SELL))
+         {
+            LastEntryMode = "SELL_BLOCKED_AFTER_LOSS";
+            SetBlockedReason("SELL blocked after same-direction loss");
+            return(-1);
+         }
          LastEntryMode = "DAILY_PROBE_SELL";
          SetBlockedReason("Signal ready");
          return(OP_SELL);
@@ -396,12 +438,24 @@ int GetEntrySignal()
 
       if((m1Up || recentUp) && m1Close > fastNow && rsiNow > NeutralRSIHigh)
       {
+         if(IsSameDirectionLossBlocked(OP_BUY))
+         {
+            LastEntryMode = "BUY_BLOCKED_AFTER_LOSS";
+            SetBlockedReason("BUY blocked after same-direction loss");
+            return(-1);
+         }
          LastEntryMode = "FORCE_DAILY_BUY";
          SetBlockedReason("Signal ready");
          return(OP_BUY);
       }
       if((m1Down || recentDown) && m1Close < fastNow && rsiNow < NeutralRSILow)
       {
+         if(IsSameDirectionLossBlocked(OP_SELL))
+         {
+            LastEntryMode = "SELL_BLOCKED_AFTER_LOSS";
+            SetBlockedReason("SELL blocked after same-direction loss");
+            return(-1);
+         }
          LastEntryMode = "FORCE_DAILY_SELL";
          SetBlockedReason("Signal ready");
          return(OP_SELL);
@@ -658,6 +712,55 @@ int CountTodayTrades()
    return(count);
 }
 
+int CountTodayLossTrades()
+{
+   datetime dayStart = TodayStart(TimeCurrent());
+   int count = 0;
+
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+         continue;
+      if(OrderSymbol() != TradeSymbol || OrderMagicNumber() != MagicNumber)
+         continue;
+      if(OrderCloseTime() < dayStart)
+         continue;
+      if(OrderType() != OP_BUY && OrderType() != OP_SELL)
+         continue;
+
+      double profit = OrderProfit() + OrderSwap() + OrderCommission();
+      if(profit < 0.0)
+         count++;
+   }
+
+   return(count);
+}
+
+bool IsSameDirectionLossBlocked(int orderType)
+{
+   if(!BlockSameDirectionAfterLoss)
+      return(false);
+
+   datetime dayStart = TodayStart(TimeCurrent());
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+         continue;
+      if(OrderSymbol() != TradeSymbol || OrderMagicNumber() != MagicNumber)
+         continue;
+      if(OrderCloseTime() < dayStart)
+         continue;
+      if(OrderType() != orderType)
+         continue;
+
+      double profit = OrderProfit() + OrderSwap() + OrderCommission();
+      if(profit < 0.0)
+         return(true);
+   }
+
+   return(false);
+}
+
 double GetTodayClosedProfitMoney()
 {
    datetime dayStart = TodayStart(TimeCurrent());
@@ -777,6 +880,7 @@ void UpdateStatusPanel()
       "TF: M1 entry / M5 filter\n",
       "Spread: ", IntegerToString(GetSpreadPoints()), " points\n",
       "Today Trades: ", IntegerToString(CountTodayTrades()), "/", IntegerToString(MaxTradesPerDay), "\n",
+      "Today Loss Trades: ", IntegerToString(CountTodayLossTrades()), "/", IntegerToString(MaxLossTradesPerDay), "\n",
       "Today P/L: ", DoubleToString(GetTodayClosedProfitMoney(), 2), "\n",
       "Daily Lock: ", lockText, "\n",
       "Entry Mode: ", LastEntryMode, "\n",

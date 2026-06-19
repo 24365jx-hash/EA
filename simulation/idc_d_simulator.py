@@ -50,6 +50,10 @@ class Params:
     lock_trigger_points: int
     lock_profit_points: int
     trail_step_points: int
+    max_loss_trades_per_day: int
+    block_same_direction_after_loss: bool
+    min_m5_slope_points: int
+    max_m5_pullback_points: int
     round_trip_cost_points: int
     session_start_utc: int
     session_end_utc: int
@@ -333,6 +337,8 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
     trades: list[Trade] = []
     daily_net: dict[str, float] = {}
     daily_trades: dict[str, int] = {}
+    daily_loss_trades: dict[str, int] = {}
+    daily_loss_sides: dict[str, set[str]] = {}
     daily_locked: set[str] = set()
     bars_by_day: dict[str, int] = {}
     for source_bar in bars:
@@ -349,6 +355,8 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
         day = bar.time.date().isoformat()
         daily_net.setdefault(day, 0.0)
         daily_trades.setdefault(day, 0)
+        daily_loss_trades.setdefault(day, 0)
+        daily_loss_sides.setdefault(day, set())
 
         if position is not None:
             side = str(position["side"])
@@ -406,6 +414,9 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
                 trades.append(trade)
                 entry_day = trade.entry_time.date().isoformat()
                 daily_net[entry_day] = daily_net.get(entry_day, 0.0) + net_points
+                if net_points < 0:
+                    daily_loss_trades[entry_day] = daily_loss_trades.get(entry_day, 0) + 1
+                    daily_loss_sides.setdefault(entry_day, set()).add(side)
                 if locked:
                     daily_locked.add(entry_day)
                 equity_curve.append(equity_curve[-1] + net_points)
@@ -420,6 +431,8 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
         if not (params.session_start_utc <= bar.time.hour < params.session_end_utc):
             continue
         if daily_trades.get(day, 0) >= params.max_trades_per_day:
+            continue
+        if params.max_loss_trades_per_day > 0 and daily_loss_trades.get(day, 0) >= params.max_loss_trades_per_day:
             continue
         if params.stop_after_daily_lock and day in daily_locked:
             continue
@@ -442,6 +455,10 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
 
         m5_fast_value = float(m5_fast[m5_pos] or 0.0)
         m5_slow_value = float(m5_slow[m5_pos] or 0.0)
+        m5_fast_prev_value = float(m5_fast[m5_pos - 1] or 0.0) if m5_pos > 0 and m5_fast[m5_pos - 1] is not None else m5_fast_value
+        m5_slow_prev_value = float(m5_slow[m5_pos - 1] or 0.0) if m5_pos > 0 and m5_slow[m5_pos - 1] is not None else m5_slow_value
+        m5_close_value = m5_bars[m5_pos].close
+        m5_close_prev_value = m5_bars[m5_pos - 1].close if m5_pos > 0 else m5_close_value
         m5_atr_points = float(m5_atr[m5_pos] or 0.0) / POINT_SIZE
         fast_now = float(m1_fast[idx] or 0.0)
         slow_now = float(m1_slow[idx] or 0.0)
@@ -452,16 +469,28 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
 
         m5_up = m5_fast_value > m5_slow_value
         m5_down = m5_fast_value < m5_slow_value
+        m5_rising = (
+            m5_fast_value >= m5_fast_prev_value + params.min_m5_slope_points * POINT_SIZE
+            and m5_slow_value >= m5_slow_prev_value
+            and m5_close_value >= m5_close_prev_value
+        )
+        m5_falling = (
+            m5_fast_value <= m5_fast_prev_value - params.min_m5_slope_points * POINT_SIZE
+            and m5_slow_value <= m5_slow_prev_value
+            and m5_close_value <= m5_close_prev_value
+        )
         m1_up = fast_now > slow_now
         m1_down = fast_now < slow_now
         strong_opposite_for_buy = m5_down and bar.close < m5_slow_value
         strong_opposite_for_sell = m5_up and bar.close > m5_slow_value
+        buy_trend_healthy = m5_up and m5_rising and bar.close >= m5_fast_value - params.max_m5_pullback_points * POINT_SIZE
+        sell_trend_healthy = m5_down and m5_falling and bar.close <= m5_fast_value + params.max_m5_pullback_points * POINT_SIZE
         neutral_rsi = params.neutral_rsi_low <= rsi_now <= params.neutral_rsi_high
         previous_close = bars[idx - 1].close
         previous_close_2 = bars[idx - 2].close
 
         buy_pullback_reclaim = (
-            m5_up
+            buy_trend_healthy
             and m1_up
             and rsi_now >= params.rsi_buy_min
             and bar.close > bar.open
@@ -469,7 +498,7 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
             and bar.low <= fast_now + 20 * POINT_SIZE
         )
         sell_pullback_reclaim = (
-            m5_down
+            sell_trend_healthy
             and m1_down
             and rsi_now <= params.rsi_sell_max
             and bar.close < bar.open
@@ -526,6 +555,8 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
         elif force_sell:
             side = "sell"
         if side is None:
+            continue
+        if params.block_same_direction_after_loss and side in daily_loss_sides.get(day, set()):
             continue
 
         entry = bar.close
@@ -603,6 +634,10 @@ def candidate_params() -> list[Params]:
                                     lock_trigger_points=200,
                                     lock_profit_points=200,
                                     trail_step_points=trail_step,
+                                    max_loss_trades_per_day=1,
+                                    block_same_direction_after_loss=True,
+                                    min_m5_slope_points=10,
+                                    max_m5_pullback_points=120,
                                     round_trip_cost_points=35,
                                     session_start_utc=6,
                                     session_end_utc=21,
