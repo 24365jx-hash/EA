@@ -25,6 +25,7 @@ input int    TrailingStep_Points = 300;   // Jumping trailing interval after fir
 input bool   EnableBuy = true;
 input bool   EnableSell = true;
 input bool   EnableEntryDebugLog = true;  // Print exact filter rejection reasons on closed bars.
+input bool   ResetCycleStateOnInit = false; // Debug option: clear stored one-entry-per-cross memory on attach.
 
 //--- global state
 double   _StrategyPoint = 0.0;
@@ -41,6 +42,14 @@ int OnInit()
       return(INIT_FAILED);
 
    _StrategyPoint = DetectStrategyPoint();
+
+   if(ResetCycleStateOnInit)
+     {
+      string resetKey = CrossStateKey();
+      if(GlobalVariableCheck(resetKey))
+         GlobalVariableDel(resetKey);
+      Print("IDC cycle state reset on init. Key=", resetKey);
+     }
 
    int currentRelation = GetEMARelation(1);
    _lastCrossType = currentRelation;
@@ -87,9 +96,23 @@ void OnTick()
    lastBarTime = Time[0];
 
    CheckForCrossChange();
+   RefreshRecentCrossStateFromHistory();
 
-   if(!HasOpenPosition() && _entryAllowedInCurrentCross)
-      CheckForEntry();
+   if(HasOpenPosition())
+     {
+      DebugEntryLog("Entry gate skipped before condition check: open position already exists. " +
+                    EntryGateStateText());
+      return;
+     }
+
+   if(!_entryAllowedInCurrentCross)
+     {
+      DebugEntryLog("Entry gate skipped before condition check: entry is not allowed for current cross. " +
+                    EntryGateStateText());
+      return;
+     }
+
+   CheckForEntry();
   }
 
 //+------------------------------------------------------------------+
@@ -302,6 +325,35 @@ void CheckForCrossChange()
             ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
             ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross));
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Recover recent cross state if OnInit/history loading missed it   |
+//+------------------------------------------------------------------+
+void RefreshRecentCrossStateFromHistory()
+  {
+   if(_entryAllowedInCurrentCross)
+      return;
+
+   datetime foundCrossTime = 0;
+   int foundCrossType = 0;
+   int barsSinceCross = 0;
+
+   if(!FindLatestRecentCross(foundCrossTime, foundCrossType, barsSinceCross))
+      return;
+
+   if(foundCrossTime == _crossTime)
+      return;
+
+   _crossTime = foundCrossTime;
+   _lastCrossType = foundCrossType;
+   _entryAllowedInCurrentCross = !IsCurrentCrossAlreadyTraded();
+
+   Print("Recovered recent EMA cross from history. Type=", CrossTypeToText(_lastCrossType),
+         ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
+         ", BarsSinceCross=", barsSinceCross,
+         ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross),
+         ", AlreadyTraded=", BoolToText(IsCurrentCrossAlreadyTraded()));
   }
 
 //+------------------------------------------------------------------+
@@ -589,6 +641,31 @@ void DebugEntryLog(const string message)
          " ClosedBar=", TimeToString(Time[1], TIME_DATE|TIME_MINUTES),
          ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
          ", CrossType=", CrossTypeToText(_lastCrossType));
+  }
+
+//+------------------------------------------------------------------+
+//| Entry gate state diagnostics                                     |
+//+------------------------------------------------------------------+
+string EntryGateStateText()
+  {
+   int barsSinceCross = -1;
+   string crossTimeText = "none";
+   string alreadyTradedText = "false";
+
+   if(_crossTime > 0)
+     {
+      barsSinceCross = iBarShift(NULL, 0, _crossTime, true);
+      crossTimeText = TimeToString(_crossTime, TIME_DATE|TIME_MINUTES);
+      alreadyTradedText = BoolToText(IsCurrentCrossAlreadyTraded());
+     }
+
+   return("EntryAllowed=" + BoolToText(_entryAllowedInCurrentCross) +
+          ", LastCrossType=" + CrossTypeToText(_lastCrossType) +
+          ", CrossTime=" + crossTimeText +
+          ", BarsSinceCross=" + IntegerToString(barsSinceCross) +
+          ", MaxSetupCandles=" + IntegerToString(Max_Setup_Candles) +
+          ", AlreadyTraded=" + alreadyTradedText +
+          ", CurrentRelation=" + CrossTypeToText(GetEMARelation(1)));
   }
 
 //+------------------------------------------------------------------+
