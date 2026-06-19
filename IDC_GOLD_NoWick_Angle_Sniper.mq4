@@ -23,6 +23,7 @@ input int    TrailingStart_Points = 200;  // First secured profit distance from 
 input int    TrailingStep_Points = 300;   // Jumping trailing interval after first secure point.
 input bool   EnableBuy = true;
 input bool   EnableSell = true;
+input bool   EnableEntryDebugLog = true;  // Print exact filter rejection reasons on closed bars.
 
 //--- global state
 double   _StrategyPoint = 0.0;
@@ -293,6 +294,17 @@ bool HasOpenPosition()
 //+------------------------------------------------------------------+
 bool IsNoWickCandle(const int index, const int orderType)
   {
+   string reason = "";
+   return(CheckNoWickCandle(index, orderType, reason));
+  }
+
+//+------------------------------------------------------------------+
+//| No-Wick candle strategy check with rejection reason              |
+//+------------------------------------------------------------------+
+bool CheckNoWickCandle(const int index, const int orderType, string &reason)
+  {
+   reason = "";
+
    double open = NormalizePrice(Open[index]);
    double close = NormalizePrice(Close[index]);
    double high = NormalizePrice(High[index]);
@@ -300,11 +312,17 @@ bool IsNoWickCandle(const int index, const int orderType)
    double fullSize = NormalizePrice(high - low);
 
    if(fullSize <= 0.0)
+     {
+      reason = "full candle size is zero. " + CandleMetricsText(index);
       return(false);
+     }
 
    double bodySize = MathAbs(close - open);
    if(bodySize <= 0.0)
+     {
+      reason = "doji body is zero. " + CandleMetricsText(index);
       return(false);
+     }
 
    double upperWick = NormalizePrice(high - MathMax(open, close));
    double lowerWick = NormalizePrice(MathMin(open, close) - low);
@@ -312,33 +330,92 @@ bool IsNoWickCandle(const int index, const int orderType)
    if(orderType == OP_BUY)
      {
       if(close <= open)
+       {
+        reason = "BUY requires bullish candle. " + CandleMetricsText(index);
          return(false);
+       }
 
       // Original rule: upper wick must be exactly zero on quoted broker digits.
       if(upperWick > 0.0)
+       {
+        reason = "BUY upper wick is not zero. UpperWick=" +
+                 DoubleToString(upperWick, Digits) + ". " + CandleMetricsText(index);
          return(false);
+       }
 
       double lowerWickPct = (lowerWick / fullSize) * 100.0;
       if(lowerWickPct > Max_Wick_Percentage)
+       {
+        reason = "BUY lower wick percentage exceeds limit. LowerWickPct=" +
+                 DoubleToString(lowerWickPct, 2) + ", Limit=" +
+                 DoubleToString(Max_Wick_Percentage, 2) + ". " + CandleMetricsText(index);
          return(false);
+       }
      }
    else if(orderType == OP_SELL)
      {
       if(close >= open)
+       {
+        reason = "SELL requires bearish candle. " + CandleMetricsText(index);
          return(false);
+       }
 
       // Original rule: lower wick must be exactly zero on quoted broker digits.
       if(lowerWick > 0.0)
+       {
+        reason = "SELL lower wick is not zero. LowerWick=" +
+                 DoubleToString(lowerWick, Digits) + ". " + CandleMetricsText(index);
          return(false);
+       }
 
       double upperWickPct = (upperWick / fullSize) * 100.0;
       if(upperWickPct > Max_Wick_Percentage)
+       {
+        reason = "SELL upper wick percentage exceeds limit. UpperWickPct=" +
+                 DoubleToString(upperWickPct, 2) + ", Limit=" +
+                 DoubleToString(Max_Wick_Percentage, 2) + ". " + CandleMetricsText(index);
          return(false);
+       }
      }
    else
+     {
+      reason = "invalid order type for candle check.";
       return(false);
+     }
 
    return(true);
+  }
+
+//+------------------------------------------------------------------+
+//| Candle metrics text for diagnostics                              |
+//+------------------------------------------------------------------+
+string CandleMetricsText(const int index)
+  {
+   double open = NormalizePrice(Open[index]);
+   double close = NormalizePrice(Close[index]);
+   double high = NormalizePrice(High[index]);
+   double low = NormalizePrice(Low[index]);
+   double fullSize = NormalizePrice(high - low);
+   double upperWick = NormalizePrice(high - MathMax(open, close));
+   double lowerWick = NormalizePrice(MathMin(open, close) - low);
+   double upperPct = 0.0;
+   double lowerPct = 0.0;
+
+   if(fullSize > 0.0)
+     {
+      upperPct = (upperWick / fullSize) * 100.0;
+      lowerPct = (lowerWick / fullSize) * 100.0;
+     }
+
+   return("Time=" + TimeToString(Time[index], TIME_DATE|TIME_MINUTES) +
+          ", O=" + DoubleToString(open, Digits) +
+          ", H=" + DoubleToString(high, Digits) +
+          ", L=" + DoubleToString(low, Digits) +
+          ", C=" + DoubleToString(close, Digits) +
+          ", UpperWick=" + DoubleToString(upperWick, Digits) +
+          " (" + DoubleToString(upperPct, 2) + "%)" +
+          ", LowerWick=" + DoubleToString(lowerWick, Digits) +
+          " (" + DoubleToString(lowerPct, 2) + "%)");
   }
 
 //+------------------------------------------------------------------+
@@ -364,53 +441,119 @@ double GetEMAAngle(const int period, const int index)
 void CheckForEntry()
   {
    if(_crossTime <= 0)
+     {
+      DebugEntryLog("No entry check: no valid EMA cross inside setup window.");
       return;
+     }
 
    int barsSinceCross = iBarShift(NULL, 0, _crossTime, true);
    if(barsSinceCross < 0)
      {
       _entryAllowedInCurrentCross = false;
+      DebugEntryLog("Entry disabled: cross time was not found on current chart. CrossTime=" +
+                    TimeToString(_crossTime, TIME_DATE|TIME_MINUTES));
       return;
      }
 
    if(barsSinceCross > Max_Setup_Candles)
      {
       _entryAllowedInCurrentCross = false;
+      DebugEntryLog("Entry disabled: setup window expired. BarsSinceCross=" +
+                    IntegerToString(barsSinceCross) + ", Max=" +
+                    IntegerToString(Max_Setup_Candles));
       return;
      }
 
    if(IsCurrentCrossAlreadyTraded())
      {
       _entryAllowedInCurrentCross = false;
+      DebugEntryLog("Entry disabled: this EMA cross was already traded. CrossTime=" +
+                    TimeToString(_crossTime, TIME_DATE|TIME_MINUTES));
       return;
      }
 
    int currentRelation = GetEMARelation(1);
    double angle = GetEMAAngle(EMA_Fast_Period, 1);
 
-   if(EnableBuy && currentRelation == 1)
+   if(currentRelation == 1)
      {
-      if(IsNoWickCandle(1, OP_BUY) && angle >= EMA_Angle_Threshold)
+      if(!EnableBuy)
         {
-         if(OpenPosition(OP_BUY))
-           {
-            MarkCurrentCrossAsTraded();
-            _entryAllowedInCurrentCross = false;
-           }
+         DebugEntryLog("BUY skipped: EnableBuy is false.");
+         return;
         }
+
+      string buyCandleReason = "";
+      if(!CheckNoWickCandle(1, OP_BUY, buyCandleReason))
+        {
+         DebugEntryLog("BUY rejected by No-Wick filter. " + buyCandleReason);
+         return;
+        }
+
+      if(angle < EMA_Angle_Threshold)
+        {
+         DebugEntryLog("BUY rejected by EMA angle. Angle=" +
+                       DoubleToString(angle, 2) + ", Required>=" +
+                       DoubleToString(EMA_Angle_Threshold, 2));
+         return;
+        }
+
+      if(OpenPosition(OP_BUY))
+        {
+         MarkCurrentCrossAsTraded();
+         _entryAllowedInCurrentCross = false;
+        }
+
+      return;
      }
 
-   if(EnableSell && currentRelation == -1)
+   if(currentRelation == -1)
      {
-      if(IsNoWickCandle(1, OP_SELL) && angle <= -EMA_Angle_Threshold)
+      if(!EnableSell)
         {
-         if(OpenPosition(OP_SELL))
-           {
-            MarkCurrentCrossAsTraded();
-            _entryAllowedInCurrentCross = false;
-           }
+         DebugEntryLog("SELL skipped: EnableSell is false.");
+         return;
         }
+
+      string sellCandleReason = "";
+      if(!CheckNoWickCandle(1, OP_SELL, sellCandleReason))
+        {
+         DebugEntryLog("SELL rejected by No-Wick filter. " + sellCandleReason);
+         return;
+        }
+
+      if(angle > -EMA_Angle_Threshold)
+        {
+         DebugEntryLog("SELL rejected by EMA angle. Angle=" +
+                       DoubleToString(angle, 2) + ", Required<=" +
+                       DoubleToString(-EMA_Angle_Threshold, 2));
+         return;
+        }
+
+      if(OpenPosition(OP_SELL))
+        {
+         MarkCurrentCrossAsTraded();
+         _entryAllowedInCurrentCross = false;
+        }
+
+      return;
      }
+
+   DebugEntryLog("Entry rejected: EMA relation is flat/equal on closed candle.");
+  }
+
+//+------------------------------------------------------------------+
+//| Entry diagnostics                                                |
+//+------------------------------------------------------------------+
+void DebugEntryLog(const string message)
+  {
+   if(!EnableEntryDebugLog)
+      return;
+
+   Print("IDC_ENTRY_DEBUG: ", message,
+         " ClosedBar=", TimeToString(Time[1], TIME_DATE|TIME_MINUTES),
+         ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
+         ", CrossType=", CrossTypeToText(_lastCrossType));
   }
 
 //+------------------------------------------------------------------+
