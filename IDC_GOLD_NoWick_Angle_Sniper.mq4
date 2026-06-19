@@ -220,6 +220,14 @@ double NormalizePrice(const double price)
   }
 
 //+------------------------------------------------------------------+
+//| Price comparison after broker-digit normalization                |
+//+------------------------------------------------------------------+
+bool PriceExceeds(const double value, const double limit)
+  {
+   return(NormalizePrice(value - limit) > 0.0);
+  }
+
+//+------------------------------------------------------------------+
 //| EMA relation helper                                              |
 //+------------------------------------------------------------------+
 int GetEMARelation(const int index)
@@ -361,7 +369,7 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
        }
 
       // Visual no-wick rule: tiny broker tick noise is treated as zero.
-      if(upperWick > zeroWickTolerance)
+      if(PriceExceeds(upperWick, zeroWickTolerance))
        {
         reason = "BUY upper wick exceeds visual zero tolerance. UpperWick=" +
                  DoubleToString(upperWick, Digits) + ", Tolerance=" +
@@ -387,7 +395,7 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
        }
 
       // Visual no-wick rule: tiny broker tick noise is treated as zero.
-      if(lowerWick > zeroWickTolerance)
+      if(PriceExceeds(lowerWick, zeroWickTolerance))
        {
         reason = "SELL lower wick exceeds visual zero tolerance. LowerWick=" +
                  DoubleToString(lowerWick, Digits) + ", Tolerance=" +
