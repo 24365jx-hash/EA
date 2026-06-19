@@ -21,22 +21,37 @@
 
 ```text
 experts/IDC_D.mq4                  MT4 EA source
+experts/IDC_D.ex4                  MT4 compiled EA binary
 simulation/idc_d_simulator.py      독립 시뮬레이션/검증 도구
 simulation/reports/*.md            생성된 검증 리포트
 ```
 
-## 기본 검증 결과
+## MT4 컴파일 결과
+
+`experts/IDC_D.ex4`는 Wine 환경에서 Pepperstone MT4의 `metaeditor.exe`로 직접 컴파일했습니다.
+
+```text
+Result: 0 errors, 0 warnings
+```
+
+## v2.0 기본 검증 결과
 
 공개 데이터 제약 때문에 브로커 XAUUSD tick 데이터가 아닌 Yahoo Finance `GC=F` 데이터를 GOLD 프록시로 사용했습니다.
 
-- 8일 1분 프록시: 손실 없이 20핍 잠금 4회였으나 거래일 빈도 기준은 미달
+- 8일 1분 프록시: PASS
+  - 8 활성일 중 7일 거래
+  - 7일 20핍 잠금
+  - 승률 70.0%
+  - Profit Factor 1.45
+  - 순 포인트 +450
+  - 최대 폐쇄거래 DD 505포인트
 - 60일 5분 프록시: PASS
-  - 50 활성일 중 42일 거래
-  - 38일 20핍 잠금
-  - 승률 80.9%
-  - Profit Factor 3.70
-  - 순 포인트 +11,805
-  - 최대 폐쇄거래 DD 655포인트
+  - 50 활성일 중 50일 거래
+  - 45일 20핍 잠금
+  - 승률 57.7%
+  - Profit Factor 1.62
+  - 순 포인트 +6,820
+  - 최대 폐쇄거래 DD 2,805포인트
 
 최종 실거래 전에는 반드시 사용 브로커의 MT4 Strategy Tester에서 XAUUSD M1 고품질 히스토리로 재검증해야 합니다.
 
@@ -46,14 +61,14 @@ simulation/reports/*.md            생성된 검증 리포트
 
 ```bash
 python3 simulation/idc_d_simulator.py --range 8d --interval 1m \
-  --report simulation/reports/idc_d_validation_8d_1m_proxy.md
+  --report simulation/reports/idc_d_validation_v2_8d_1m_proxy.md
 ```
 
 공개 GC=F 5분 장기 프록시:
 
 ```bash
 python3 simulation/idc_d_simulator.py --range 60d --interval 5m \
-  --report simulation/reports/idc_d_validation_60d_5m_proxy.md
+  --report simulation/reports/idc_d_validation_v2_60d_5m_proxy.md
 ```
 
 MT4에서 내보낸 XAUUSD M1 CSV:
@@ -63,11 +78,17 @@ python3 simulation/idc_d_simulator.py --csv path/to/XAUUSD_M1.csv \
   --report simulation/reports/idc_d_validation_broker_m1.md
 ```
 
+기본값 고정 검증 요약:
+
+```text
+simulation/reports/idc_d_v2_default_validation.md
+```
+
 ## EA 설치
 
-1. `experts/IDC_D.mq4`를 MT4의 `MQL4/Experts` 폴더에 복사합니다.
-2. MetaEditor에서 컴파일합니다.
-3. GOLD/XAUUSD 계열 M1 또는 M5 차트에 부착합니다.
+1. `experts/IDC_D.ex4`를 MT4의 `MQL4/Experts` 폴더에 복사합니다.
+2. 소스 수정이 필요하면 `experts/IDC_D.mq4`도 함께 복사 후 MetaEditor에서 컴파일합니다.
+3. GOLD/XAUUSD 계열 M1 차트에 부착합니다.
 4. 기본값으로 테스트 후 브로커 스프레드/StopLevel에 맞게 조정합니다.
 
 ## 주의

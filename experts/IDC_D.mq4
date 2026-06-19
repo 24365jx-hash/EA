@@ -41,10 +41,10 @@ input bool   UseManualNewsBlock       = false;
 input int    NewsBlockStartHour       = 0;
 input int    NewsBlockEndHour         = 0;
 
-input int    M5FastEMA                = 8;
-input int    M5SlowEMA                = 21;
-input int    M1FastEMA                = 5;
-input int    M1SlowEMA                = 13;
+input int    M5FastEMA                = 12;
+input int    M5SlowEMA                = 36;
+input int    M1FastEMA                = 3;
+input int    M1SlowEMA                = 9;
 input int    RSIPeriod                = 14;
 input double RSIBuyMin                = 50.0;
 input double RSISellMax               = 50.0;
@@ -56,7 +56,7 @@ input bool   UseDailyProbe            = true;
 input int    DailyProbeStartHour      = 6;
 input bool   RelaxedTrendProbe        = true;
 input bool   ForceDailyEntry          = true;
-input int    FinalEntryHour           = 13;
+input int    FinalEntryHour           = 11;
 input int    NeutralRSILow            = 48;
 input int    NeutralRSIHigh           = 52;
 
