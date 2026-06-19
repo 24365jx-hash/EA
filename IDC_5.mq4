@@ -116,7 +116,7 @@ bool FindPreviousSwingLow(double &level)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
    int firstShift = 2 + SwingDepthBars;
-   int lastShift = MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
+   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
 
    for(int shift = firstShift; shift <= lastShift; shift++)
    {
@@ -134,7 +134,7 @@ bool FindPreviousSwingHigh(double &level)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
    int firstShift = 2 + SwingDepthBars;
-   int lastShift = MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
+   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
 
    for(int shift = firstShift; shift <= lastShift; shift++)
    {
