@@ -62,6 +62,11 @@ int OnInit()
          ", Digits=", Digits,
          ", Point=", DoubleToString(Point, Digits),
          ", StrategyPoint=", DoubleToString(_StrategyPoint, Digits),
+         ", MaxWickPct=", DoubleToString(Max_Wick_Percentage, 2),
+         ", ZeroWickTolerancePoints=", ZeroWick_Tolerance_Points,
+         ", ZeroWickTolerancePrice=", DoubleToString(ZeroWickTolerancePrice(), Digits),
+         ", AngleThreshold=", DoubleToString(EMA_Angle_Threshold, 2),
+         ", AngleLookbackBars=", EMA_Angle_Lookback_Bars,
          ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
          ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross));
 
@@ -110,6 +115,11 @@ bool ValidateInputs()
    if(Max_Setup_Candles < 1)
      {
       Print("Invalid Max_Setup_Candles. It must be at least 1.");
+      return(false);
+     }
+   if(EMA_Angle_Threshold < 0.0)
+     {
+      Print("Invalid EMA_Angle_Threshold. It must be zero or greater.");
       return(false);
      }
    if(EMA_Angle_Lookback_Bars < 1)
