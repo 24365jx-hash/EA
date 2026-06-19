@@ -56,6 +56,10 @@ class Params:
     daily_probe_start_utc: int
     use_daily_probe: bool
     relaxed_trend_probe: bool
+    force_daily_entry: bool
+    final_entry_hour_utc: int
+    neutral_rsi_low: float
+    neutral_rsi_high: float
     cooldown_bars: int
     max_trades_per_day: int
     stop_after_daily_lock: bool
@@ -441,43 +445,85 @@ def simulate(bars: list[Bar], params: Params) -> SimulationResult:
         m5_atr_points = float(m5_atr[m5_pos] or 0.0) / POINT_SIZE
         fast_now = float(m1_fast[idx] or 0.0)
         slow_now = float(m1_slow[idx] or 0.0)
-        fast_prev = float(m1_fast[idx - 1] or 0.0)
-        slow_prev = float(m1_slow[idx - 1] or 0.0)
         rsi_now = float(m1_rsi[idx] or 0.0)
 
         if not (params.atr_min_points <= m5_atr_points <= params.atr_max_points):
             continue
 
-        trend_up = m5_fast_value > m5_slow_value and bar.close > m5_fast_value
-        trend_down = m5_fast_value < m5_slow_value and bar.close < m5_fast_value
-        probe_trend_up = trend_up or (params.relaxed_trend_probe and m5_fast_value > m5_slow_value)
-        probe_trend_down = trend_down or (params.relaxed_trend_probe and m5_fast_value < m5_slow_value)
-        buy_pullback_reclaim = fast_now > slow_now and fast_prev <= slow_prev and rsi_now >= params.rsi_buy_min
-        sell_pullback_reclaim = fast_now < slow_now and fast_prev >= slow_prev and rsi_now <= params.rsi_sell_max
+        m5_up = m5_fast_value > m5_slow_value
+        m5_down = m5_fast_value < m5_slow_value
+        m1_up = fast_now > slow_now
+        m1_down = fast_now < slow_now
+        strong_opposite_for_buy = m5_down and bar.close < m5_slow_value
+        strong_opposite_for_sell = m5_up and bar.close > m5_slow_value
+        neutral_rsi = params.neutral_rsi_low <= rsi_now <= params.neutral_rsi_high
+        previous_close = bars[idx - 1].close
+        previous_close_2 = bars[idx - 2].close
+
+        buy_pullback_reclaim = (
+            m5_up
+            and m1_up
+            and rsi_now >= params.rsi_buy_min
+            and bar.close > bar.open
+            and bar.close > previous_close
+            and bar.low <= fast_now + 20 * POINT_SIZE
+        )
+        sell_pullback_reclaim = (
+            m5_down
+            and m1_down
+            and rsi_now <= params.rsi_sell_max
+            and bar.close < bar.open
+            and bar.close < previous_close
+            and bar.high >= fast_now - 20 * POINT_SIZE
+        )
         buy_daily_probe = (
             params.use_daily_probe
             and daily_trades.get(day, 0) == 0
             and bar.time.hour >= params.daily_probe_start_utc
-            and fast_now > slow_now
+            and m1_up
             and bar.close > fast_now
             and rsi_now >= params.rsi_buy_min
+            and (not strong_opposite_for_buy if params.relaxed_trend_probe else m5_up)
         )
         sell_daily_probe = (
             params.use_daily_probe
             and daily_trades.get(day, 0) == 0
             and bar.time.hour >= params.daily_probe_start_utc
-            and fast_now < slow_now
+            and m1_down
             and bar.close < fast_now
             and rsi_now <= params.rsi_sell_max
+            and (not strong_opposite_for_sell if params.relaxed_trend_probe else m5_down)
+        )
+        force_buy = (
+            params.force_daily_entry
+            and daily_trades.get(day, 0) == 0
+            and bar.time.hour >= params.final_entry_hour_utc
+            and not neutral_rsi
+            and (m1_up or (bar.close > previous_close and previous_close >= previous_close_2))
+            and bar.close > fast_now
+            and rsi_now > params.neutral_rsi_high
+        )
+        force_sell = (
+            params.force_daily_entry
+            and daily_trades.get(day, 0) == 0
+            and bar.time.hour >= params.final_entry_hour_utc
+            and not neutral_rsi
+            and (m1_down or (bar.close < previous_close and previous_close <= previous_close_2))
+            and bar.close < fast_now
+            and rsi_now < params.neutral_rsi_low
         )
         side: str | None = None
-        if trend_up and buy_pullback_reclaim:
+        if buy_pullback_reclaim:
             side = "buy"
-        elif trend_down and sell_pullback_reclaim:
+        elif sell_pullback_reclaim:
             side = "sell"
-        elif probe_trend_up and buy_daily_probe:
+        elif buy_daily_probe:
             side = "buy"
-        elif probe_trend_down and sell_daily_probe:
+        elif sell_daily_probe:
+            side = "sell"
+        elif force_buy:
+            side = "buy"
+        elif force_sell:
             side = "sell"
         if side is None:
             continue
@@ -536,41 +582,42 @@ def score_result(result: SimulationResult) -> float:
 
 def candidate_params() -> list[Params]:
     candidates: list[Params] = []
-    for m5_fast, m5_slow in ((8, 21), (12, 36), (21, 55), (34, 89)):
-        for m1_fast, m1_slow in ((5, 13), (8, 21), (9, 21)):
-            for initial_sl in (250, 300, 350, 450):
-                for trail_step in (50, 75, 100):
+    for m5_fast, m5_slow in ((5, 13), (8, 21), (12, 36)):
+        for m1_fast, m1_slow in ((3, 9), (5, 13), (8, 21)):
+            for initial_sl in (250, 300, 350):
+                for trail_step in (50, 75):
                     for rsi_buy, rsi_sell in ((50, 50), (52, 48), (55, 45)):
-                        for use_probe in (False, True):
-                            for probe_start in ((12, 15) if use_probe else (21,)):
-                                relaxed_options = (False, True) if use_probe else (False,)
-                                for relaxed_probe in relaxed_options:
-                                    candidates.append(
-                                        Params(
-                                            m5_fast=m5_fast,
-                                            m5_slow=m5_slow,
-                                            m1_fast=m1_fast,
-                                            m1_slow=m1_slow,
-                                            rsi_period=14,
-                                            rsi_buy_min=rsi_buy,
-                                            rsi_sell_max=rsi_sell,
-                                            atr_min_points=35,
-                                            atr_max_points=450,
-                                            initial_sl_points=initial_sl,
-                                            lock_trigger_points=200,
-                                            lock_profit_points=200,
-                                            trail_step_points=trail_step,
-                                            round_trip_cost_points=35,
-                                            session_start_utc=6,
-                                            session_end_utc=21,
-                                            daily_probe_start_utc=probe_start,
-                                            use_daily_probe=use_probe,
-                                            relaxed_trend_probe=relaxed_probe,
-                                            cooldown_bars=10,
-                                            max_trades_per_day=4,
-                                            stop_after_daily_lock=True,
-                                        )
-                                    )
+                        for final_hour in (11, 12, 13, 14):
+                            candidates.append(
+                                Params(
+                                    m5_fast=m5_fast,
+                                    m5_slow=m5_slow,
+                                    m1_fast=m1_fast,
+                                    m1_slow=m1_slow,
+                                    rsi_period=14,
+                                    rsi_buy_min=rsi_buy,
+                                    rsi_sell_max=rsi_sell,
+                                    atr_min_points=20,
+                                    atr_max_points=600,
+                                    initial_sl_points=initial_sl,
+                                    lock_trigger_points=200,
+                                    lock_profit_points=200,
+                                    trail_step_points=trail_step,
+                                    round_trip_cost_points=35,
+                                    session_start_utc=6,
+                                    session_end_utc=21,
+                                    daily_probe_start_utc=6,
+                                    use_daily_probe=True,
+                                    relaxed_trend_probe=True,
+                                    force_daily_entry=True,
+                                    final_entry_hour_utc=final_hour,
+                                    neutral_rsi_low=48,
+                                    neutral_rsi_high=52,
+                                    cooldown_bars=10,
+                                    max_trades_per_day=3,
+                                    stop_after_daily_lock=True,
+                                )
+                            )
     return candidates
 
 
@@ -608,6 +655,7 @@ def write_report(report_path: Path, source: str, bars: list[Bar], top_results: l
         handle.write("- Timeframes: M1 execution with M5 trend/volatility filter\n")
         handle.write("- Point model: 1 point = 0.01 price unit; 20 pips = 200 points\n")
         handle.write("- Exit model: no TP; SL moves to +200 points once price reaches +200 points, then step trailing\n")
+        handle.write("- Entry model: trend pullback, daily probe, and final daily directional entry\n")
         handle.write("- Grid, martingale, and averaging-down are excluded\n\n")
         handle.write("## Data\n\n")
         handle.write(f"- Source: {source}\n")
@@ -626,7 +674,7 @@ def write_report(report_path: Path, source: str, bars: list[Bar], top_results: l
         for line in summarize(best):
             handle.write(f"- {line}\n")
         handle.write("\n## Top 5 Candidates\n\n")
-        handle.write("| Rank | Score | Trade Day Rate | Locked Day Rate | Win Rate | PF | Net Points | Max DD Points | Trades | SL | Trail Step | Probe | Relaxed | M5 EMA | M1 EMA |\n")
+        handle.write("| Rank | Score | Trade Day Rate | Locked Day Rate | Win Rate | PF | Net Points | Max DD Points | Trades | SL | Trail Step | Probe | Force | M5 EMA | M1 EMA |\n")
         handle.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n")
         for rank, result in enumerate(top_results[:5], start=1):
             params = result.params
@@ -635,23 +683,24 @@ def write_report(report_path: Path, source: str, bars: list[Bar], top_results: l
                 f"| {rank} | {result.score:.1f} | {trade_day_rate:.1%} | {result.locked_day_rate:.1%} | {result.win_rate:.1%} | "
                 f"{result.profit_factor:.2f} | {result.net_points:.1f} | {result.max_drawdown_points:.1f} | "
                 f"{len(result.trades)} | {params.initial_sl_points} | {params.trail_step_points} | "
-                f"{params.use_daily_probe}/{params.daily_probe_start_utc} | {params.relaxed_trend_probe} | "
+                f"{params.use_daily_probe}/{params.daily_probe_start_utc}/{params.relaxed_trend_probe} | "
+                f"{params.force_daily_entry}/{params.final_entry_hour_utc} | "
                 f"{params.m5_fast}/{params.m5_slow} | {params.m1_fast}/{params.m1_slow} |\n"
             )
         handle.write("\n## Validation Decision\n\n")
         if passes_validation(best):
-            handle.write("PASS: The proxy simulation is good enough to implement the MT4 EA defaults, with final broker-side MT4 Strategy Tester validation still required.\n")
+            handle.write("PASS: The M1 proxy simulation meets the v2.0 frequency and profitability floor, with final broker-side MT4 Strategy Tester validation still required.\n")
         else:
-            handle.write("FAIL: Do not ship the EA defaults without additional broker-quality XAUUSD M1 data and retesting.\n")
+            handle.write("FAIL: Do not submit as v2.0 without more M1 strategy work and broker-quality XAUUSD M1 retesting.\n")
 
 
 def passes_validation(result: SimulationResult) -> bool:
     return (
         len(result.trades) >= 5
-        and result.locked_day_rate >= 0.35
-        and (result.trade_days / result.total_days if result.total_days else 0.0) >= 0.60
+        and result.locked_day_rate >= 0.50
+        and (result.trade_days / result.total_days if result.total_days else 0.0) >= 0.80
         and result.win_rate >= 0.45
-        and result.profit_factor >= 1.05
+        and result.profit_factor >= 1.20
         and result.net_points > 0
     )
 

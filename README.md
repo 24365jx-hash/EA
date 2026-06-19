@@ -6,12 +6,14 @@
 
 - MT4 전용
 - GOLD/XAUUSD 계열 전용
-- M1 진입 + M5 추세/변동성 필터
+- M1 진입 + M5 추세/변동성 보조 필터
 - 모든 핵심 거리 설정은 포인트 단위
 - 기본 기준: 20핍 = 200포인트
 - TP 미사용
 - 가격이 진입가에서 `LockProfitTriggerPoints` 만큼 유리하게 이동하면 SL을 즉시 `LockProfitPoints` 위치로 이동
 - 이후 `TrailStepPoints` 단위로 SL을 추격
+- 정규 진입, 당일 보조 진입, 최종 1일 1회 방향성 진입 엔진
+- 차트 상태 패널과 진입 차단 사유 표시
 - 마틴게일, 물타기, 그리드 금지
 - 일일 손실 제한은 Balance 기준 `%` 입력값으로 제어
 
@@ -19,17 +21,8 @@
 
 ```text
 experts/IDC_D.mq4                  MT4 EA source
-experts/IDC_D.ex4                  MT4 compiled EA binary
 simulation/idc_d_simulator.py      독립 시뮬레이션/검증 도구
 simulation/reports/*.md            생성된 검증 리포트
-```
-
-## MT4 컴파일 결과
-
-`experts/IDC_D.ex4`는 Wine 환경에서 Pepperstone MT4의 `metaeditor.exe`로 직접 컴파일했습니다.
-
-```text
-Result: 0 errors, 0 warnings
 ```
 
 ## 기본 검증 결과
