@@ -17,7 +17,8 @@ input int    EMA_Slow_Period = 20;
 input int    Max_Setup_Candles = 20;
 input double EMA_Angle_Threshold = 10.0;
 input int    EMA_Angle_Lookback_Bars = 3;
-input double Max_Wick_Percentage = 10.0;
+input double Max_Wick_Percentage = 20.0;
+input int    ZeroWick_Tolerance_Points = 2; // Treat tiny visual/noise wicks as zero. Gold: 2 points = 0.02 price.
 input int    StopLoss_Points = 200;       // Gold standard: 200 points = 2.00 price.
 input int    TrailingStart_Points = 200;  // First secured profit distance from entry.
 input int    TrailingStep_Points = 300;   // Jumping trailing interval after first secure point.
@@ -121,6 +122,11 @@ bool ValidateInputs()
       Print("Invalid Max_Wick_Percentage. It must be between 0 and 100.");
       return(false);
      }
+   if(ZeroWick_Tolerance_Points < 0)
+     {
+      Print("Invalid ZeroWick_Tolerance_Points. It must be zero or greater.");
+      return(false);
+     }
    if(StopLoss_Points <= 0 || TrailingStart_Points <= 0 || TrailingStep_Points <= 0)
      {
       Print("Invalid point settings. StopLoss, TrailingStart, and TrailingStep must be greater than zero.");
@@ -170,6 +176,14 @@ bool IsGoldSymbol()
 double PointsToPrice(const int points)
   {
    return(points * _StrategyPoint);
+  }
+
+//+------------------------------------------------------------------+
+//| Visual zero-wick tolerance in price                              |
+//+------------------------------------------------------------------+
+double ZeroWickTolerancePrice()
+  {
+   return(PointsToPrice(ZeroWick_Tolerance_Points));
   }
 
 //+------------------------------------------------------------------+
@@ -326,6 +340,7 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
 
    double upperWick = NormalizePrice(high - MathMax(open, close));
    double lowerWick = NormalizePrice(MathMin(open, close) - low);
+   double zeroWickTolerance = ZeroWickTolerancePrice();
 
    if(orderType == OP_BUY)
      {
@@ -335,11 +350,12 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
          return(false);
        }
 
-      // Original rule: upper wick must be exactly zero on quoted broker digits.
-      if(upperWick > 0.0)
+      // Visual no-wick rule: tiny broker tick noise is treated as zero.
+      if(upperWick > zeroWickTolerance)
        {
-        reason = "BUY upper wick is not zero. UpperWick=" +
-                 DoubleToString(upperWick, Digits) + ". " + CandleMetricsText(index);
+        reason = "BUY upper wick exceeds visual zero tolerance. UpperWick=" +
+                 DoubleToString(upperWick, Digits) + ", Tolerance=" +
+                 DoubleToString(zeroWickTolerance, Digits) + ". " + CandleMetricsText(index);
          return(false);
        }
 
@@ -360,11 +376,12 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
          return(false);
        }
 
-      // Original rule: lower wick must be exactly zero on quoted broker digits.
-      if(lowerWick > 0.0)
+      // Visual no-wick rule: tiny broker tick noise is treated as zero.
+      if(lowerWick > zeroWickTolerance)
        {
-        reason = "SELL lower wick is not zero. LowerWick=" +
-                 DoubleToString(lowerWick, Digits) + ". " + CandleMetricsText(index);
+        reason = "SELL lower wick exceeds visual zero tolerance. LowerWick=" +
+                 DoubleToString(lowerWick, Digits) + ", Tolerance=" +
+                 DoubleToString(zeroWickTolerance, Digits) + ". " + CandleMetricsText(index);
          return(false);
        }
 
