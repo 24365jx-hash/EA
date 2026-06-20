@@ -182,11 +182,12 @@ bool IsBuySetupAtLevel(double support)
 {
    int shift = 1;
    double setupLow = iLow(Symbol(), PERIOD_M1, shift);
+   double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double tolerance = LevelTouchTolerancePoints * Point;
 
-   if(setupLow < support)
+   if(setupLow > support + tolerance)
       return(false);
-   if(setupLow - support > tolerance)
+   if(setupClose <= support)
       return(false);
 
    return(IsBullishLongLowerWick(shift));
@@ -196,11 +197,12 @@ bool IsSellSetupAtLevel(double resistance)
 {
    int shift = 1;
    double setupHigh = iHigh(Symbol(), PERIOD_M1, shift);
+   double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double tolerance = LevelTouchTolerancePoints * Point;
 
-   if(setupHigh > resistance)
+   if(setupHigh < resistance - tolerance)
       return(false);
-   if(resistance - setupHigh > tolerance)
+   if(setupClose >= resistance)
       return(false);
 
    return(IsBearishLongUpperWick(shift));
