@@ -133,6 +133,9 @@ bool FindBearishStructureReferenceLow(double &level)
    if(!FindRecentSwingHighs(latestHighShift, previousHighShift))
       return(false);
 
+   if(!IsBearishSwingSequence(latestLowShift, previousLowShift, latestHighShift, previousHighShift))
+      return(false);
+
    double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
    double previousLow = iLow(Symbol(), PERIOD_M1, previousLowShift);
    double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
@@ -160,6 +163,9 @@ bool FindBullishStructureReferenceHigh(double &level)
    if(!FindRecentSwingLows(latestLowShift, previousLowShift))
       return(false);
 
+   if(!IsBullishSwingSequence(latestHighShift, previousHighShift, latestLowShift, previousLowShift))
+      return(false);
+
    double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
    double previousHigh = iHigh(Symbol(), PERIOD_M1, previousHighShift);
    double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
@@ -173,6 +179,22 @@ bool FindBullishStructureReferenceHigh(double &level)
 
    level = latestHigh;
    return(true);
+}
+
+bool IsBearishSwingSequence(int latestLowShift, int previousLowShift,
+                            int latestHighShift, int previousHighShift)
+{
+   return(previousHighShift > previousLowShift &&
+          previousLowShift > latestHighShift &&
+          latestHighShift > latestLowShift);
+}
+
+bool IsBullishSwingSequence(int latestHighShift, int previousHighShift,
+                            int latestLowShift, int previousLowShift)
+{
+   return(previousLowShift > previousHighShift &&
+          previousHighShift > latestLowShift &&
+          latestLowShift > latestHighShift);
 }
 
 bool FindRecentSwingLows(int &latestShift, int &previousShift)
