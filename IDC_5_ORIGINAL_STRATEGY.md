@@ -3,7 +3,7 @@
 ## 1. 전략명
 
 - EA 이름: `IDC_5`
-- 현재 버전: `1.02`
+- 현재 버전: `1.03`
 - 전략명: GOLD M1 진행 구조 직전 스윙 실패돌파 핀바 전략
 - 대상 차트: GOLD / M1
 
@@ -26,7 +26,6 @@ TP는 사용하지 않는다. 수익 실현은 오직 트레일링 스탑으로�
 - BUY 전에는 최근 스윙 고점이 LH이고 최근 스윙 저점이 LL인 하락 구조가 확인되어야 한다.
 - 스윙 순서는 이전 고점 -> 이전 저점 -> 최근 LH -> 최근 LL 순서여야 한다.
 - LH/LL의 최소 가격 차이는 `StructureBreakMinPoints` 이상이어야 한다.
-- 셋업캔들 직전에 너무 가까운 미세 스윙은 제외하기 위해 `MinLevelAgeBars` 이상 지난 스윙만 구조 판단에 사용한다.
 - 최근 `StructureSearchBars` 범위 안에서 가장 가까운 확정 스윙저점을 BUY 기준선으로 본다.
 
 ### 3.2 SELL 기준 구조
@@ -35,7 +34,6 @@ TP는 사용하지 않는다. 수익 실현은 오직 트레일링 스탑으로�
 - SELL 전에는 최근 스윙 저점이 HL이고 최근 스윙 고점이 HH인 상승 구조가 확인되어야 한다.
 - 스윙 순서는 이전 저점 -> 이전 고점 -> 최근 HL -> 최근 HH 순서여야 한다.
 - HL/HH의 최소 가격 차이는 `StructureBreakMinPoints` 이상이어야 한다.
-- 셋업캔들 직전에 너무 가까운 미세 스윙은 제외하기 위해 `MinLevelAgeBars` 이상 지난 스윙만 구조 판단에 사용한다.
 - 최근 `StructureSearchBars` 범위 안에서 가장 가까운 확정 스윙고점을 SELL 기준선으로 본다.
 
 ## 4. BUY 진입 조건
@@ -83,8 +81,7 @@ SELL은 아래 조건을 모두 만족해야 한다.
 ### 6.1 BUY 셋업캔들
 
 - 아래꼬리가 `MinTailPoints` 이상이어야 한다.
-- 아래꼬리가 몸통 대비 `WickToBodyRatio` 배 이상이어야 한다.
-- 아래꼬리가 위꼬리 대비 `WickToOppositeWickRatio` 배 이상이어야 한다.
+- 아래꼬리가 전체 캔들 길이 대비 `MinSignalWickPercent`% 이상이어야 한다.
 - 종가는 직전 스윙저점 위에서 마감해야 한다.
 - BUY 방향 컬러는 양봉이다.
 - 셋업캔들이 양봉이 아니면 이후 2개 마감봉 안에서 양봉 확인을 기다린다.
@@ -92,8 +89,7 @@ SELL은 아래 조건을 모두 만족해야 한다.
 ### 6.2 SELL 셋업캔들
 
 - 위꼬리가 `MinTailPoints` 이상이어야 한다.
-- 위꼬리가 몸통 대비 `WickToBodyRatio` 배 이상이어야 한다.
-- 위꼬리가 아래꼬리 대비 `WickToOppositeWickRatio` 배 이상이어야 한다.
+- 위꼬리가 전체 캔들 길이 대비 `MinSignalWickPercent`% 이상이어야 한다.
 - 종가는 직전 스윙고점 아래에서 마감해야 한다.
 - SELL 방향 컬러는 음봉이다.
 - 셋업캔들이 음봉이 아니면 이후 2개 마감봉 안에서 음봉 확인을 기다린다.
@@ -175,13 +171,12 @@ newSL = entryPrice - lockedPoints * Point
 | `TrailingStepPoints` | 트레일링 SL 이동 간격 |
 | `StructureSearchBars` | 직전 구조 고점/저점 탐색 범위 |
 | `SwingDepthBars` | 확정 스윙 고점/저점 판정 깊이 |
-| `MinLevelAgeBars` | 셋업캔들 직전 미세 스윙을 제외하기 위한 최소 스윙 나이 |
 | `MinFalseBreakoutPoints` | 유효 false breakout으로 인정할 최소 라인 찌름 거리 |
 | `MaxLevelSweepPoints` | 구조선 돌파 실패로 인정할 최대 꼬리 스윕 폭 |
 | `StructureBreakMinPoints` | LH/LL 또는 HL/HH 구조 진행으로 인정할 최소 스윙 간 가격 차이 |
 | `MinTailPoints` | 핀바 꼬리 최소 길이 |
-| `WickToBodyRatio` | 신호 꼬리 대 몸통 최소 비율 |
-| `WickToOppositeWickRatio` | 신호 꼬리 대 반대 꼬리 최소 비율 |
+| `MinSignalWickPercent` | 신호 꼬리가 전체 캔들에서 차지해야 하는 최소 비율 |
+| `DebugSignalFilters` | 진입 조건 탈락 사유 로그 출력 여부 |
 
 ## 10. 사용하지 않는 규칙
 
@@ -205,8 +200,8 @@ IDC_5 원본전략에는 아래 항목을 넣지 않는다.
 | 명확한 상승 구조 SELL | 최근 스윙 저점은 HL, 최근 스윙 고점은 HH이어야 함 |
 | 직전 저점 돌파 실패 BUY | 셋업캔들 저가가 직전 스윙저점을 실제 하향 이탈 후 종가가 저점 위에서 마감 |
 | 직전 고점 돌파 실패 SELL | 셋업캔들 고가가 직전 스윙고점을 실제 상향 이탈 후 종가가 고점 아래에서 마감 |
-| BUY 셋업은 긴 아래꼬리 핀바 | 아래꼬리 최소 길이, 몸통 대비 비율, 반대꼬리 대비 비율 검사 |
-| SELL 셋업은 긴 위꼬리 핀바 | 위꼬리 최소 길이, 몸통 대비 비율, 반대꼬리 대비 비율 검사 |
+| BUY 셋업은 긴 아래꼬리 핀바 | 아래꼬리 최소 길이 및 전체 캔들 대비 비율 검사 |
+| SELL 셋업은 긴 위꼬리 핀바 | 위꼬리 최소 길이 및 전체 캔들 대비 비율 검사 |
 | BUY 컬러 조건 | 셋업캔들이 양봉이거나 셋업 포함 3개 캔들 안에서 양봉 확인 |
 | SELL 컬러 조건 | 셋업캔들이 음봉이거나 셋업 포함 3개 캔들 안에서 음봉 확인 |
 | TP 없음 | 주문 및 수정 시 TP 0.0 |

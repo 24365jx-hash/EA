@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.02"
+#property version   "1.03"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -13,13 +13,12 @@ input int    TrailingStartPoints      = 200;
 input int    TrailingStepPoints       = 10;
 input int    StructureSearchBars      = 120;
 input int    SwingDepthBars           = 3;
-input int    MinLevelAgeBars          = 8;
 input int    MinFalseBreakoutPoints   = 1;
 input int    MaxLevelSweepPoints      = 80;
 input int    StructureBreakMinPoints  = 30;
 input int    MinTailPoints            = 30;
-input double WickToBodyRatio          = 2.0;
-input double WickToOppositeWickRatio  = 1.5;
+input double MinSignalWickPercent     = 50.0;
+input bool   DebugSignalFilters       = true;
 
 string EA_NAME = "IDC_5";
 datetime lastM1BarTime = 0;
@@ -63,20 +62,15 @@ int OnInit()
       Print(EA_NAME, ": SwingDepthBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(MinLevelAgeBars < 2)
-   {
-      Print(EA_NAME, ": MinLevelAgeBars must be at least 2.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
    if(MinFalseBreakoutPoints < 0 || MaxLevelSweepPoints < 0 ||
       StructureBreakMinPoints < 0 || MinTailPoints < 0)
    {
       Print(EA_NAME, ": point filters cannot be negative.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(WickToBodyRatio <= 0.0 || WickToOppositeWickRatio <= 0.0)
+   if(MinSignalWickPercent <= 0.0 || MinSignalWickPercent > 100.0)
    {
-      Print(EA_NAME, ": wick ratios must be greater than zero.");
+      Print(EA_NAME, ": MinSignalWickPercent must be between 0 and 100.");
       return(INIT_PARAMETERS_INCORRECT);
    }
 
@@ -129,6 +123,8 @@ void EvaluateClosedSetupCandle()
          StartPendingEntry(OP_BUY);
       return;
    }
+   else
+      DebugSignal("BUY blocked: bearish structure or strict false-breakout setup not found.");
 
    double previousSwingHigh = 0.0;
    if(FindBullishStructureReferenceHigh(previousSwingHigh) && IsSellSetupAtLevel(previousSwingHigh))
@@ -138,6 +134,8 @@ void EvaluateClosedSetupCandle()
       else
          StartPendingEntry(OP_SELL);
    }
+   else
+      DebugSignal("SELL blocked: bullish structure or strict false-breakout setup not found.");
 }
 
 bool HasPendingEntry()
@@ -156,6 +154,12 @@ void ClearPendingEntry()
 {
    pendingEntryType = -1;
    pendingEntryBarsRemaining = 0;
+}
+
+void DebugSignal(string message)
+{
+   if(DebugSignalFilters)
+      Print(EA_NAME, ": ", message);
 }
 
 bool ProcessPendingEntry()
@@ -267,7 +271,7 @@ bool IsBullishSwingSequence(int latestHighShift, int previousHighShift,
 bool FindRecentSwingLows(int &latestShift, int &previousShift)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = (int)MathMax(2 + SwingDepthBars, MinLevelAgeBars);
+   int firstShift = 1 + SwingDepthBars;
    int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
 
    for(int shift = firstShift; shift <= lastShift; shift++)
@@ -290,7 +294,7 @@ bool FindRecentSwingLows(int &latestShift, int &previousShift)
 bool FindRecentSwingHighs(int &latestShift, int &previousShift)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = (int)MathMax(2 + SwingDepthBars, MinLevelAgeBars);
+   int firstShift = 1 + SwingDepthBars;
    int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
 
    for(int shift = firstShift; shift <= lastShift; shift++)
@@ -383,11 +387,10 @@ bool IsLongLowerWick(int shift)
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
 
-   double body = MathAbs(closePrice - openPrice);
    double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
-   double upperWick = highPrice - MathMax(openPrice, closePrice);
+   double candleRange = highPrice - lowPrice;
 
-   return(IsLongSetupWick(lowerWick, body, upperWick));
+   return(IsLongSetupWick(lowerWick, candleRange));
 }
 
 bool IsLongUpperWick(int shift)
@@ -397,23 +400,21 @@ bool IsLongUpperWick(int shift)
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
 
-   double body = MathAbs(closePrice - openPrice);
    double upperWick = highPrice - MathMax(openPrice, closePrice);
-   double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
+   double candleRange = highPrice - lowPrice;
 
-   return(IsLongSetupWick(upperWick, body, lowerWick));
+   return(IsLongSetupWick(upperWick, candleRange));
 }
 
-bool IsLongSetupWick(double signalWick, double body, double oppositeWick)
+bool IsLongSetupWick(double signalWick, double candleRange)
 {
    if(signalWick < MinTailPoints * Point)
       return(false);
 
-   double comparableBody = MathMax(body, Point);
-   if(signalWick < comparableBody * WickToBodyRatio)
+   if(candleRange <= 0.0)
       return(false);
 
-   if(signalWick < oppositeWick * WickToOppositeWickRatio)
+   if(signalWick * 100.0 < candleRange * MinSignalWickPercent)
       return(false);
 
    return(true);
