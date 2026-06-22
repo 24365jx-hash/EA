@@ -3,7 +3,7 @@
 //|                        No-Wick Angle Sniper strategy for MT4      |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.02"
+#property version   "1.03"
 #property description "IDC_GOLD No-Wick Angle Sniper EA"
 
 #define IDC_PI 3.14159265358979323846
@@ -450,6 +450,14 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
          return(false);
        }
 
+      if(PriceExceeds(upperWick, lowerWick))
+       {
+        reason = "BUY lower wick must be equal to or longer than upper wick. UpperWick=" +
+                 DoubleToString(upperWick, Digits) + ", LowerWick=" +
+                 DoubleToString(lowerWick, Digits) + ". " + CandleMetricsText(index);
+         return(false);
+       }
+
       double lowerWickPct = (lowerWick / fullSize) * 100.0;
       if(lowerWickPct > Max_Wick_Percentage)
        {
@@ -473,6 +481,14 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
         reason = "SELL lower wick exceeds visual zero tolerance. LowerWick=" +
                  DoubleToString(lowerWick, Digits) + ", Tolerance=" +
                  DoubleToString(zeroWickTolerance, Digits) + ". " + CandleMetricsText(index);
+         return(false);
+       }
+
+      if(PriceExceeds(lowerWick, upperWick))
+       {
+        reason = "SELL upper wick must be equal to or longer than lower wick. UpperWick=" +
+                 DoubleToString(upperWick, Digits) + ", LowerWick=" +
+                 DoubleToString(lowerWick, Digits) + ". " + CandleMetricsText(index);
          return(false);
        }
 
