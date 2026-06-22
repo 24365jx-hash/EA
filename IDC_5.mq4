@@ -276,7 +276,6 @@ bool IsSwingHigh(int shift)
 bool IsBuySetupAtLevel(double support)
 {
    int shift = 1;
-   double setupOpen = iOpen(Symbol(), PERIOD_M1, shift);
    double setupLow = iLow(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double tolerance = LevelTouchTolerancePoints * Point;
@@ -286,18 +285,15 @@ bool IsBuySetupAtLevel(double support)
       return(false);
    if(support - setupLow > maxSweep)
       return(false);
-   if(MathMin(setupOpen, setupClose) <= support)
-      return(false);
    if(setupClose <= support)
       return(false);
 
-   return(IsBullishLongLowerWick(shift));
+   return(IsLongLowerWick(shift));
 }
 
 bool IsSellSetupAtLevel(double resistance)
 {
    int shift = 1;
-   double setupOpen = iOpen(Symbol(), PERIOD_M1, shift);
    double setupHigh = iHigh(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double tolerance = LevelTouchTolerancePoints * Point;
@@ -307,23 +303,18 @@ bool IsSellSetupAtLevel(double resistance)
       return(false);
    if(setupHigh - resistance > maxSweep)
       return(false);
-   if(MathMax(setupOpen, setupClose) >= resistance)
-      return(false);
    if(setupClose >= resistance)
       return(false);
 
-   return(IsBearishLongUpperWick(shift));
+   return(IsLongUpperWick(shift));
 }
 
-bool IsBullishLongLowerWick(int shift)
+bool IsLongLowerWick(int shift)
 {
    double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
    double closePrice = iClose(Symbol(), PERIOD_M1, shift);
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
-
-   if(closePrice <= openPrice)
-      return(false);
 
    double body = MathAbs(closePrice - openPrice);
    double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
@@ -332,15 +323,12 @@ bool IsBullishLongLowerWick(int shift)
    return(IsLongSetupWick(lowerWick, body, upperWick));
 }
 
-bool IsBearishLongUpperWick(int shift)
+bool IsLongUpperWick(int shift)
 {
    double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
    double closePrice = iClose(Symbol(), PERIOD_M1, shift);
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
-
-   if(closePrice >= openPrice)
-      return(false);
 
    double body = MathAbs(closePrice - openPrice);
    double upperWick = highPrice - MathMax(openPrice, closePrice);
