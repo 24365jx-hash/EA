@@ -13,10 +13,10 @@ input int    TrailingStartPoints      = 200;
 input int    TrailingStepPoints       = 10;
 input int    StructureSearchBars      = 120;
 input int    SwingDepthBars           = 3;
-input int    MinStructureTouches      = 2;
 input int    MinLevelAgeBars          = 8;
 input int    LevelTouchTolerancePoints = 20;
 input int    MaxLevelSweepPoints      = 80;
+input int    StructureBreakMinPoints  = 30;
 input int    MinTailPoints            = 30;
 input double WickToBodyRatio          = 2.0;
 input double WickToOppositeWickRatio  = 1.5;
@@ -61,17 +61,13 @@ int OnInit()
       Print(EA_NAME, ": SwingDepthBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(MinStructureTouches < 2)
-   {
-      Print(EA_NAME, ": MinStructureTouches must be at least 2.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
    if(MinLevelAgeBars < 2)
    {
       Print(EA_NAME, ": MinLevelAgeBars must be at least 2.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(LevelTouchTolerancePoints < 0 || MaxLevelSweepPoints < 0 || MinTailPoints < 0)
+   if(LevelTouchTolerancePoints < 0 || MaxLevelSweepPoints < 0 ||
+      StructureBreakMinPoints < 0 || MinTailPoints < 0)
    {
       Print(EA_NAME, ": point filters cannot be negative.");
       return(INIT_PARAMETERS_INCORRECT);
@@ -113,100 +109,116 @@ void EvaluateClosedSetupCandle()
    if(CountOpenPositions() > 0)
       return;
 
-   double support = 0.0;
-   if(FindPreviousStructureLow(support) && IsBuySetupAtLevel(support))
+   double previousSwingLow = 0.0;
+   if(FindBearishStructureReferenceLow(previousSwingLow) && IsBuySetupAtLevel(previousSwingLow))
    {
       OpenTrade(OP_BUY);
       return;
    }
 
-   double resistance = 0.0;
-   if(FindPreviousStructureHigh(resistance) && IsSellSetupAtLevel(resistance))
+   double previousSwingHigh = 0.0;
+   if(FindBullishStructureReferenceHigh(previousSwingHigh) && IsSellSetupAtLevel(previousSwingHigh))
       OpenTrade(OP_SELL);
 }
 
-bool FindPreviousStructureLow(double &level)
+bool FindBearishStructureReferenceLow(double &level)
+{
+   int latestLowShift = -1;
+   int previousLowShift = -1;
+   int latestHighShift = -1;
+   int previousHighShift = -1;
+
+   if(!FindRecentSwingLows(latestLowShift, previousLowShift))
+      return(false);
+   if(!FindRecentSwingHighs(latestHighShift, previousHighShift))
+      return(false);
+
+   double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
+   double previousLow = iLow(Symbol(), PERIOD_M1, previousLowShift);
+   double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
+   double previousHigh = iHigh(Symbol(), PERIOD_M1, previousHighShift);
+   double minimumBreak = StructureBreakMinPoints * Point;
+
+   if(latestLow >= previousLow - minimumBreak)
+      return(false);
+   if(latestHigh >= previousHigh - minimumBreak)
+      return(false);
+
+   level = latestLow;
+   return(true);
+}
+
+bool FindBullishStructureReferenceHigh(double &level)
+{
+   int latestHighShift = -1;
+   int previousHighShift = -1;
+   int latestLowShift = -1;
+   int previousLowShift = -1;
+
+   if(!FindRecentSwingHighs(latestHighShift, previousHighShift))
+      return(false);
+   if(!FindRecentSwingLows(latestLowShift, previousLowShift))
+      return(false);
+
+   double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
+   double previousHigh = iHigh(Symbol(), PERIOD_M1, previousHighShift);
+   double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
+   double previousLow = iLow(Symbol(), PERIOD_M1, previousLowShift);
+   double minimumBreak = StructureBreakMinPoints * Point;
+
+   if(latestHigh <= previousHigh + minimumBreak)
+      return(false);
+   if(latestLow <= previousLow + minimumBreak)
+      return(false);
+
+   level = latestHigh;
+   return(true);
+}
+
+bool FindRecentSwingLows(int &latestShift, int &previousShift)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
    int firstShift = (int)MathMax(2 + SwingDepthBars, MinLevelAgeBars);
    int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
-   {
-      if(IsSwingLow(shift) && BuildStructureLowLevel(shift, firstShift, lastShift, level))
-         return(true);
-   }
-
-   return(false);
-}
-
-bool FindPreviousStructureHigh(double &level)
-{
-   int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = (int)MathMax(2 + SwingDepthBars, MinLevelAgeBars);
-   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
-   {
-      if(IsSwingHigh(shift) && BuildStructureHighLevel(shift, firstShift, lastShift, level))
-         return(true);
-   }
-
-   return(false);
-}
-
-bool BuildStructureLowLevel(int candidateShift, int firstShift, int lastShift, double &level)
-{
-   double candidate = iLow(Symbol(), PERIOD_M1, candidateShift);
-   double tolerance = LevelTouchTolerancePoints * Point;
-   int touches = 0;
-   double levelSum = 0.0;
 
    for(int shift = firstShift; shift <= lastShift; shift++)
    {
       if(!IsSwingLow(shift))
          continue;
 
-      double swingLow = iLow(Symbol(), PERIOD_M1, shift);
-      if(MathAbs(swingLow - candidate) <= tolerance)
+      if(latestShift < 0)
+         latestShift = shift;
+      else
       {
-         touches++;
-         levelSum += swingLow;
+         previousShift = shift;
+         return(true);
       }
    }
 
-   if(touches < MinStructureTouches)
-      return(false);
-
-   level = NormalizeDouble(levelSum / touches, Digits);
-   return(true);
+   return(false);
 }
 
-bool BuildStructureHighLevel(int candidateShift, int firstShift, int lastShift, double &level)
+bool FindRecentSwingHighs(int &latestShift, int &previousShift)
 {
-   double candidate = iHigh(Symbol(), PERIOD_M1, candidateShift);
-   double tolerance = LevelTouchTolerancePoints * Point;
-   int touches = 0;
-   double levelSum = 0.0;
+   int bars = iBars(Symbol(), PERIOD_M1);
+   int firstShift = (int)MathMax(2 + SwingDepthBars, MinLevelAgeBars);
+   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
 
    for(int shift = firstShift; shift <= lastShift; shift++)
    {
       if(!IsSwingHigh(shift))
          continue;
 
-      double swingHigh = iHigh(Symbol(), PERIOD_M1, shift);
-      if(MathAbs(swingHigh - candidate) <= tolerance)
+      if(latestShift < 0)
+         latestShift = shift;
+      else
       {
-         touches++;
-         levelSum += swingHigh;
+         previousShift = shift;
+         return(true);
       }
    }
 
-   if(touches < MinStructureTouches)
-      return(false);
-
-   level = NormalizeDouble(levelSum / touches, Digits);
-   return(true);
+   return(false);
 }
 
 bool IsSwingLow(int shift)
