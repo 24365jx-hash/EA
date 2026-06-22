@@ -3,7 +3,7 @@
 //|                        No-Wick Angle Sniper strategy for MT4      |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.00"
+#property version   "1.01"
 #property description "IDC_GOLD No-Wick Angle Sniper EA"
 
 #define IDC_PI 3.14159265358979323846
@@ -270,12 +270,14 @@ int GetEMARelation(const int index)
   }
 
 //+------------------------------------------------------------------+
-//| Find most recent closed-bar EMA cross inside setup window        |
+//| Find most recent closed-bar EMA cross inside post-cross window   |
 //+------------------------------------------------------------------+
 bool FindLatestRecentCross(datetime &crossTime, int &crossType, int &barsSinceCross)
   {
-   int maxShift = Max_Setup_Candles;
-   int requiredBars = EMA_Slow_Period + EMA_Angle_Lookback_Bars + Max_Setup_Candles + 5;
+   // The cross candle itself is not a setup candle. A valid setup is the
+   // 1st through Max_Setup_Candles-th candle closed after the cross candle.
+   int maxShift = Max_Setup_Candles + 1;
+   int requiredBars = EMA_Slow_Period + EMA_Angle_Lookback_Bars + maxShift + 5;
 
    if(Bars <= requiredBars)
       return(false);
@@ -352,6 +354,7 @@ void RefreshRecentCrossStateFromHistory()
    Print("Recovered recent EMA cross from history. Type=", CrossTypeToText(_lastCrossType),
          ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
          ", BarsSinceCross=", barsSinceCross,
+         ", SetupCandlesAfterCross=", barsSinceCross - 1,
          ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross),
          ", AlreadyTraded=", BoolToText(IsCurrentCrossAlreadyTraded()));
   }
@@ -542,11 +545,20 @@ void CheckForEntry()
       return;
      }
 
-   if(barsSinceCross > Max_Setup_Candles)
+   int setupCandlesAfterCross = barsSinceCross - 1;
+   if(setupCandlesAfterCross <= 0)
+     {
+      DebugEntryLog("Entry skipped: EMA cross candle itself is not a valid setup candle. BarsSinceCross=" +
+                    IntegerToString(barsSinceCross) + ", SetupCandlesAfterCross=" +
+                    IntegerToString(setupCandlesAfterCross));
+      return;
+     }
+
+   if(setupCandlesAfterCross > Max_Setup_Candles)
      {
       _entryAllowedInCurrentCross = false;
-      DebugEntryLog("Entry disabled: setup window expired. BarsSinceCross=" +
-                    IntegerToString(barsSinceCross) + ", Max=" +
+      DebugEntryLog("Entry disabled: post-cross setup window expired. SetupCandlesAfterCross=" +
+                    IntegerToString(setupCandlesAfterCross) + ", Max=" +
                     IntegerToString(Max_Setup_Candles));
       return;
      }
@@ -649,12 +661,14 @@ void DebugEntryLog(const string message)
 string EntryGateStateText()
   {
    int barsSinceCross = -1;
+   int setupCandlesAfterCross = -1;
    string crossTimeText = "none";
    string alreadyTradedText = "false";
 
    if(_crossTime > 0)
      {
       barsSinceCross = iBarShift(NULL, 0, _crossTime, true);
+      setupCandlesAfterCross = barsSinceCross - 1;
       crossTimeText = TimeToString(_crossTime, TIME_DATE|TIME_MINUTES);
       alreadyTradedText = BoolToText(IsCurrentCrossAlreadyTraded());
      }
@@ -663,6 +677,7 @@ string EntryGateStateText()
           ", LastCrossType=" + CrossTypeToText(_lastCrossType) +
           ", CrossTime=" + crossTimeText +
           ", BarsSinceCross=" + IntegerToString(barsSinceCross) +
+          ", SetupCandlesAfterCross=" + IntegerToString(setupCandlesAfterCross) +
           ", MaxSetupCandles=" + IntegerToString(Max_Setup_Candles) +
           ", AlreadyTraded=" + alreadyTradedText +
           ", CurrentRelation=" + CrossTypeToText(GetEMARelation(1)));
