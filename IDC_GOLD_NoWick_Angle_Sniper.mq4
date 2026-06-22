@@ -3,7 +3,7 @@
 //|                        No-Wick Angle Sniper strategy for MT4      |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.01"
+#property version   "1.02"
 #property description "IDC_GOLD No-Wick Angle Sniper EA"
 
 #define IDC_PI 3.14159265358979323846
@@ -26,6 +26,7 @@ input bool   EnableBuy = true;
 input bool   EnableSell = true;
 input bool   EnableEntryDebugLog = true;  // Print exact filter rejection reasons on closed bars.
 input bool   ResetCycleStateOnInit = false; // Debug option: clear stored one-entry-per-cross memory on attach.
+input int    ProtectionRetryCount = 5;    // Retries for SL attach/forced close protection.
 
 //--- global state
 double   _StrategyPoint = 0.0;
@@ -76,6 +77,7 @@ int OnInit()
          ", ZeroWickTolerancePrice=", DoubleToString(ZeroWickTolerancePrice(), Digits),
          ", AngleThreshold=", DoubleToString(EMA_Angle_Threshold, 2),
          ", AngleLookbackBars=", EMA_Angle_Lookback_Bars,
+         ", ProtectionRetryCount=", ProtectionRetryCount,
          ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
          ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross));
 
@@ -87,6 +89,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   ManageUnprotectedPositions();
    ManageTrailing();
 
    static datetime lastBarTime = 0;
@@ -163,6 +166,11 @@ bool ValidateInputs()
    if(StopLoss_Points <= 0 || TrailingStart_Points <= 0 || TrailingStep_Points <= 0)
      {
       Print("Invalid point settings. StopLoss, TrailingStart, and TrailingStep must be greater than zero.");
+      return(false);
+     }
+   if(ProtectionRetryCount < 1)
+     {
+      Print("Invalid ProtectionRetryCount. It must be at least 1.");
       return(false);
      }
 
@@ -311,22 +319,32 @@ void CheckForCrossChange()
    if(currentRelation == 0)
       return;
 
-   if(_lastCrossType == 0)
+   datetime foundCrossTime = 0;
+   int foundCrossType = 0;
+   int barsSinceCross = 0;
+
+   if(FindLatestRecentCross(foundCrossTime, foundCrossType, barsSinceCross))
      {
-      _lastCrossType = currentRelation;
+      if(foundCrossTime != _crossTime)
+        {
+         _crossTime = foundCrossTime;
+         _lastCrossType = foundCrossType;
+         _entryAllowedInCurrentCross = !IsCurrentCrossAlreadyTraded();
+
+         Print("EMA cross synchronized from history. Type=", CrossTypeToText(_lastCrossType),
+               ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
+               ", BarsSinceCross=", barsSinceCross,
+               ", SetupCandlesAfterCross=", barsSinceCross - 1,
+               ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross),
+               ", AlreadyTraded=", BoolToText(IsCurrentCrossAlreadyTraded()));
+        }
+      else
+         _lastCrossType = foundCrossType;
+
       return;
      }
 
-   if(currentRelation != _lastCrossType)
-     {
-      _lastCrossType = currentRelation;
-      _crossTime = Time[1];
-      _entryAllowedInCurrentCross = !IsCurrentCrossAlreadyTraded();
-
-      Print("New EMA cross detected. Type=", CrossTypeToText(_lastCrossType),
-            ", CrossTime=", TimeToString(_crossTime, TIME_DATE|TIME_MINUTES),
-            ", EntryAllowed=", BoolToText(_entryAllowedInCurrentCross));
-     }
+   _lastCrossType = currentRelation;
   }
 
 //+------------------------------------------------------------------+
@@ -691,13 +709,24 @@ bool OpenPosition(const int orderType)
    RefreshRates();
 
    double entryPrice = (orderType == OP_BUY) ? Ask : Bid;
+   double requestedSL = CalculateInitialStopLoss(orderType, entryPrice);
    int slippagePoints = PointsToBrokerPoints(Slippage);
    color orderColor = (orderType == OP_BUY) ? clrLime : clrRed;
    string orderComment = (orderType == OP_BUY) ? "IDC_NOWICK_BUY" : "IDC_NOWICK_SELL";
 
+   if(!CanPlaceStopLoss(orderType, requestedSL))
+     {
+      Print("Order blocked before send: configured initial SL is not legal right now. Type=",
+            OrderTypeToText(orderType),
+            ", Entry=", DoubleToString(entryPrice, Digits),
+            ", RequestedSL=", DoubleToString(requestedSL, Digits),
+            ", StopLossPoints=", StopLoss_Points);
+      return(false);
+     }
+
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, LotSize, NormalizePrice(entryPrice),
-                          slippagePoints, 0, 0, orderComment, MagicNumber, 0, orderColor);
+                          slippagePoints, requestedSL, 0, orderComment, MagicNumber, 0, orderColor);
 
    if(ticket < 0)
      {
@@ -706,10 +735,13 @@ bool OpenPosition(const int orderType)
       return(false);
      }
 
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+   if(!SelectOrderWithRetries(ticket))
      {
       Print("OrderSelect failed after OrderSend. Ticket=", ticket,
-            ", Error=", GetLastError());
+            ", Error=", GetLastError(),
+            ". Protection monitor will continue scanning open orders.");
+      MarkCurrentCrossAsTraded();
+      _entryAllowedInCurrentCross = false;
       return(false);
      }
 
@@ -719,21 +751,20 @@ bool OpenPosition(const int orderType)
    RefreshRates();
    if(!CanPlaceStopLoss(orderType, exactSL))
      {
-      Print("Exact initial SL cannot be placed because of broker stop/freeze level. Ticket=", ticket,
+      Print("Exact initial SL cannot be placed after fill because of broker stop/freeze level. Ticket=", ticket,
             ", RequestedSL=", DoubleToString(exactSL, Digits),
             ", StopLossPoints=", StopLoss_Points);
       CloseUnprotectedPosition(ticket);
+      MarkCurrentCrossAsTraded();
+      _entryAllowedInCurrentCross = false;
       return(false);
      }
 
-   ResetLastError();
-   bool modified = OrderModify(ticket, openPrice, exactSL, 0, 0, orderColor);
-   if(!modified)
+   if(!AttachStopLossWithRetries(ticket, exactSL, orderColor, "initial exact SL"))
      {
-      Print("Initial exact SL OrderModify failed. Ticket=", ticket,
-            ", SL=", DoubleToString(exactSL, Digits),
-            ", Error=", GetLastError());
       CloseUnprotectedPosition(ticket);
+      MarkCurrentCrossAsTraded();
+      _entryAllowedInCurrentCross = false;
       return(false);
      }
 
@@ -805,26 +836,163 @@ bool CanPlaceStopLoss(const int orderType, const double slPrice)
   }
 
 //+------------------------------------------------------------------+
+//| Select an order with retries after trade operations              |
+//+------------------------------------------------------------------+
+bool SelectOrderWithRetries(const int ticket)
+  {
+   for(int attempt = 1; attempt <= ProtectionRetryCount; attempt++)
+     {
+      if(OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+         return(true);
+
+      RefreshRates();
+      Sleep(100);
+     }
+
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+//| Attach or correct SL with retries                                |
+//+------------------------------------------------------------------+
+bool AttachStopLossWithRetries(const int ticket, const double targetSL,
+                               const color arrowColor, const string context)
+  {
+   double normalizedSL = NormalizePrice(targetSL);
+
+   for(int attempt = 1; attempt <= ProtectionRetryCount; attempt++)
+     {
+      if(!SelectOrderWithRetries(ticket))
+        {
+         Print("SL protection select retry failed. Context=", context,
+               ", Ticket=", ticket,
+               ", Attempt=", attempt,
+               ", Error=", GetLastError());
+         Sleep(100);
+         continue;
+        }
+
+      if(OrderCloseTime() > 0)
+         return(true);
+
+      int orderType = OrderType();
+      if(orderType != OP_BUY && orderType != OP_SELL)
+         return(false);
+
+      double currentSL = NormalizePrice(OrderStopLoss());
+      if(currentSL != 0.0 && NormalizePrice(MathAbs(currentSL - normalizedSL)) <= 0.0)
+         return(true);
+
+      RefreshRates();
+      if(!CanPlaceStopLoss(orderType, normalizedSL))
+        {
+         Print("SL protection cannot place stop right now. Context=", context,
+               ", Ticket=", ticket,
+               ", Attempt=", attempt,
+               ", TargetSL=", DoubleToString(normalizedSL, Digits));
+         Sleep(150);
+         continue;
+        }
+
+      ResetLastError();
+      bool modified = OrderModify(ticket, OrderOpenPrice(), normalizedSL,
+                                  OrderTakeProfit(), 0, arrowColor);
+      if(modified)
+         return(true);
+
+      Print("SL protection OrderModify failed. Context=", context,
+            ", Ticket=", ticket,
+            ", Attempt=", attempt,
+            ", TargetSL=", DoubleToString(normalizedSL, Digits),
+            ", Error=", GetLastError());
+      Sleep(150);
+     }
+
+   Print("CRITICAL: SL protection failed after retries. Context=", context,
+         ", Ticket=", ticket,
+         ", TargetSL=", DoubleToString(normalizedSL, Digits),
+         ". Forced close will be attempted.");
+
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+//| Monitor and resolve any position without SL                      |
+//+------------------------------------------------------------------+
+void ManageUnprotectedPositions()
+  {
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol())
+         continue;
+
+      int orderType = OrderType();
+      if(orderType != OP_BUY && orderType != OP_SELL)
+         continue;
+
+      if(OrderStopLoss() != 0.0)
+         continue;
+
+      int ticket = OrderTicket();
+      double emergencySL = CalculateInitialStopLoss(orderType, OrderOpenPrice());
+      color arrowColor = (orderType == OP_BUY) ? clrLime : clrRed;
+
+      Print("CRITICAL: Unprotected position detected. Ticket=", ticket,
+            ", Type=", OrderTypeToText(orderType),
+            ", Open=", DoubleToString(OrderOpenPrice(), Digits),
+            ", EmergencySL=", DoubleToString(emergencySL, Digits));
+
+      if(AttachStopLossWithRetries(ticket, emergencySL, arrowColor, "unprotected position monitor"))
+         continue;
+
+      CloseUnprotectedPosition(ticket);
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| Close position if exact initial SL could not be attached         |
 //+------------------------------------------------------------------+
 bool CloseUnprotectedPosition(const int ticket)
   {
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
-      return(false);
+   for(int attempt = 1; attempt <= ProtectionRetryCount; attempt++)
+     {
+      if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+        {
+         RefreshRates();
+         Sleep(150);
+         continue;
+        }
 
-   RefreshRates();
+      if(OrderCloseTime() > 0)
+         return(true);
 
-   int orderType = OrderType();
-   double closePrice = (orderType == OP_BUY) ? Bid : Ask;
-   int slippagePoints = PointsToBrokerPoints(Slippage);
+      RefreshRates();
 
-   ResetLastError();
-   bool closed = OrderClose(ticket, OrderLots(), NormalizePrice(closePrice), slippagePoints, clrOrange);
-   if(!closed)
-      Print("Failed to close unprotected position. Ticket=", ticket,
+      int orderType = OrderType();
+      if(orderType != OP_BUY && orderType != OP_SELL)
+         return(false);
+
+      double closePrice = (orderType == OP_BUY) ? Bid : Ask;
+      int slippagePoints = PointsToBrokerPoints(Slippage);
+
+      ResetLastError();
+      bool closed = OrderClose(ticket, OrderLots(), NormalizePrice(closePrice), slippagePoints, clrOrange);
+      if(closed)
+         return(true);
+
+      Print("Forced close retry failed for unprotected position. Ticket=", ticket,
+            ", Attempt=", attempt,
             ", Error=", GetLastError());
+      Sleep(200);
+     }
 
-   return(closed);
+   Print("CRITICAL: Failed to close unprotected position after retries. Ticket=", ticket,
+         ". Protection monitor will retry on the next tick.");
+
+   return(false);
   }
 
 //+------------------------------------------------------------------+
