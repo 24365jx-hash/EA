@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -14,7 +14,7 @@ input int    TrailingStepPoints       = 10;
 input int    StructureSearchBars      = 120;
 input int    SwingDepthBars           = 3;
 input int    MinLevelAgeBars          = 8;
-input int    LevelTouchTolerancePoints = 20;
+input int    MinFalseBreakoutPoints   = 1;
 input int    MaxLevelSweepPoints      = 80;
 input int    StructureBreakMinPoints  = 30;
 input int    MinTailPoints            = 30;
@@ -66,7 +66,7 @@ int OnInit()
       Print(EA_NAME, ": MinLevelAgeBars must be at least 2.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(LevelTouchTolerancePoints < 0 || MaxLevelSweepPoints < 0 ||
+   if(MinFalseBreakoutPoints < 0 || MaxLevelSweepPoints < 0 ||
       StructureBreakMinPoints < 0 || MinTailPoints < 0)
    {
       Print(EA_NAME, ": point filters cannot be negative.");
@@ -278,10 +278,10 @@ bool IsBuySetupAtLevel(double support)
    int shift = 1;
    double setupLow = iLow(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
-   double tolerance = LevelTouchTolerancePoints * Point;
+   double minPierce = MinFalseBreakoutPoints * Point;
    double maxSweep = MaxLevelSweepPoints * Point;
 
-   if(setupLow > support + tolerance)
+   if(setupLow > support - minPierce)
       return(false);
    if(support - setupLow > maxSweep)
       return(false);
@@ -296,10 +296,10 @@ bool IsSellSetupAtLevel(double resistance)
    int shift = 1;
    double setupHigh = iHigh(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
-   double tolerance = LevelTouchTolerancePoints * Point;
+   double minPierce = MinFalseBreakoutPoints * Point;
    double maxSweep = MaxLevelSweepPoints * Point;
 
-   if(setupHigh < resistance - tolerance)
+   if(setupHigh < resistance + minPierce)
       return(false);
    if(setupHigh - resistance > maxSweep)
       return(false);
