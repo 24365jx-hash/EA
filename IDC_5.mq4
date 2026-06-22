@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.01"
+#property version   "1.02"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -23,6 +23,8 @@ input double WickToOppositeWickRatio  = 1.5;
 
 string EA_NAME = "IDC_5";
 datetime lastM1BarTime = 0;
+int pendingEntryType = -1;
+int pendingEntryBarsRemaining = 0;
 
 int OnInit()
 {
@@ -107,18 +109,83 @@ void EvaluateClosedSetupCandle()
       return;
 
    if(CountOpenPositions() > 0)
+   {
+      ClearPendingEntry();
       return;
+   }
+
+   if(HasPendingEntry())
+   {
+      if(ProcessPendingEntry())
+         return;
+   }
 
    double previousSwingLow = 0.0;
    if(FindBearishStructureReferenceLow(previousSwingLow) && IsBuySetupAtLevel(previousSwingLow))
    {
-      OpenTrade(OP_BUY);
+      if(IsBuyColorCandle(1))
+         OpenTrade(OP_BUY);
+      else
+         StartPendingEntry(OP_BUY);
       return;
    }
 
    double previousSwingHigh = 0.0;
    if(FindBullishStructureReferenceHigh(previousSwingHigh) && IsSellSetupAtLevel(previousSwingHigh))
-      OpenTrade(OP_SELL);
+   {
+      if(IsSellColorCandle(1))
+         OpenTrade(OP_SELL);
+      else
+         StartPendingEntry(OP_SELL);
+   }
+}
+
+bool HasPendingEntry()
+{
+   return((pendingEntryType == OP_BUY || pendingEntryType == OP_SELL) &&
+          pendingEntryBarsRemaining > 0);
+}
+
+void StartPendingEntry(int orderType)
+{
+   pendingEntryType = orderType;
+   pendingEntryBarsRemaining = 2;
+}
+
+void ClearPendingEntry()
+{
+   pendingEntryType = -1;
+   pendingEntryBarsRemaining = 0;
+}
+
+bool ProcessPendingEntry()
+{
+   bool confirmed = false;
+
+   if(pendingEntryType == OP_BUY)
+      confirmed = IsBuyColorCandle(1);
+   else if(pendingEntryType == OP_SELL)
+      confirmed = IsSellColorCandle(1);
+   else
+   {
+      ClearPendingEntry();
+      return(false);
+   }
+
+   if(confirmed)
+   {
+      int orderType = pendingEntryType;
+      ClearPendingEntry();
+      OpenTrade(orderType);
+      return(true);
+   }
+
+   pendingEntryBarsRemaining--;
+   if(pendingEntryBarsRemaining > 0)
+      return(true);
+
+   ClearPendingEntry();
+   return(false);
 }
 
 bool FindBearishStructureReferenceLow(double &level)
@@ -350,6 +417,16 @@ bool IsLongSetupWick(double signalWick, double body, double oppositeWick)
       return(false);
 
    return(true);
+}
+
+bool IsBuyColorCandle(int shift)
+{
+   return(iClose(Symbol(), PERIOD_M1, shift) > iOpen(Symbol(), PERIOD_M1, shift));
+}
+
+bool IsSellColorCandle(int shift)
+{
+   return(iClose(Symbol(), PERIOD_M1, shift) < iOpen(Symbol(), PERIOD_M1, shift));
 }
 
 void OpenTrade(int orderType)
