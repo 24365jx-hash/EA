@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.03"
+#property version   "1.04"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -217,6 +217,8 @@ bool FindBearishStructureReferenceLow(double &level)
       return(false);
    if(latestHigh >= previousHigh - minimumBreak)
       return(false);
+   if(HasClosedBelowLevelAfterSwing(latestLowShift, latestLow))
+      return(false);
 
    level = latestLow;
    return(true);
@@ -247,9 +249,33 @@ bool FindBullishStructureReferenceHigh(double &level)
       return(false);
    if(latestLow <= previousLow + minimumBreak)
       return(false);
+   if(HasClosedAboveLevelAfterSwing(latestHighShift, latestHigh))
+      return(false);
 
    level = latestHigh;
    return(true);
+}
+
+bool HasClosedBelowLevelAfterSwing(int swingShift, double level)
+{
+   for(int shift = swingShift - 1; shift >= 2; shift--)
+   {
+      if(iClose(Symbol(), PERIOD_M1, shift) < level)
+         return(true);
+   }
+
+   return(false);
+}
+
+bool HasClosedAboveLevelAfterSwing(int swingShift, double level)
+{
+   for(int shift = swingShift - 1; shift >= 2; shift--)
+   {
+      if(iClose(Symbol(), PERIOD_M1, shift) > level)
+         return(true);
+   }
+
+   return(false);
 }
 
 bool IsBearishSwingSequence(int latestLowShift, int previousLowShift,
