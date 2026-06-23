@@ -3,7 +3,7 @@
 //|                        No-Wick Angle Sniper strategy for MT4      |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.03"
+#property version   "1.04"
 #property description "IDC_GOLD No-Wick Angle Sniper EA"
 
 #define IDC_PI 3.14159265358979323846
@@ -17,6 +17,7 @@ input int    EMA_Slow_Period = 20;
 input int    Max_Setup_Candles = 20;
 input double EMA_Angle_Threshold = 10.0;
 input int    EMA_Angle_Lookback_Bars = 3;
+input int    Min_Body_Points = 50;         // Gold: 50 points = 0.50 minimum setup candle body.
 input double Max_Wick_Percentage = 20.0;
 input int    ZeroWick_Tolerance_Points = 2; // Treat tiny visual/noise wicks as zero. Gold: 2 points = 0.02 price.
 input int    StopLoss_Points = 200;       // Gold standard: 200 points = 2.00 price.
@@ -27,6 +28,7 @@ input bool   EnableSell = true;
 input bool   EnableEntryDebugLog = true;  // Print exact filter rejection reasons on closed bars.
 input bool   ResetCycleStateOnInit = false; // Debug option: clear stored one-entry-per-cross memory on attach.
 input int    ProtectionRetryCount = 5;    // Retries for SL attach/forced close protection.
+input bool   EnableVirtualTrailingGuard = true; // Market-close backup if broker rejects protected SL move.
 
 //--- global state
 double   _StrategyPoint = 0.0;
@@ -73,6 +75,8 @@ int OnInit()
          ", Point=", DoubleToString(Point, Digits),
          ", StrategyPoint=", DoubleToString(_StrategyPoint, Digits),
          ", MaxWickPct=", DoubleToString(Max_Wick_Percentage, 2),
+         ", MinBodyPoints=", Min_Body_Points,
+         ", MinBodyPrice=", DoubleToString(PointsToPrice(Min_Body_Points), Digits),
          ", ZeroWickTolerancePoints=", ZeroWick_Tolerance_Points,
          ", ZeroWickTolerancePrice=", DoubleToString(ZeroWickTolerancePrice(), Digits),
          ", AngleThreshold=", DoubleToString(EMA_Angle_Threshold, 2),
@@ -90,6 +94,7 @@ int OnInit()
 void OnTick()
   {
    ManageUnprotectedPositions();
+   ManageVirtualTrailingGuards();
    ManageTrailing();
 
    static datetime lastBarTime = 0;
@@ -151,6 +156,11 @@ bool ValidateInputs()
    if(EMA_Angle_Lookback_Bars < 1)
      {
       Print("Invalid EMA_Angle_Lookback_Bars. It must be at least 1.");
+      return(false);
+     }
+   if(Min_Body_Points < 0)
+     {
+      Print("Invalid Min_Body_Points. It must be zero or greater.");
       return(false);
      }
    if(Max_Wick_Percentage < 0.0 || Max_Wick_Percentage > 100.0)
@@ -426,6 +436,16 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
    if(bodySize <= 0.0)
      {
       reason = "doji body is zero. " + CandleMetricsText(index);
+      return(false);
+     }
+
+   double minimumBodySize = PointsToPrice(Min_Body_Points);
+   if(PriceExceeds(minimumBodySize, bodySize))
+     {
+      reason = "setup candle body is smaller than minimum. BodySize=" +
+               DoubleToString(bodySize, Digits) + ", MinBody=" +
+               DoubleToString(minimumBodySize, Digits) + " (" +
+               IntegerToString(Min_Body_Points) + " points). " + CandleMetricsText(index);
       return(false);
      }
 
@@ -997,7 +1017,10 @@ bool CloseUnprotectedPosition(const int ticket)
       ResetLastError();
       bool closed = OrderClose(ticket, OrderLots(), NormalizePrice(closePrice), slippagePoints, clrOrange);
       if(closed)
+        {
+         DeleteVirtualTrailingGuard(ticket);
          return(true);
+        }
 
       Print("Forced close retry failed for unprotected position. Ticket=", ticket,
             ", Attempt=", attempt,
@@ -1007,6 +1030,167 @@ bool CloseUnprotectedPosition(const int ticket)
 
    Print("CRITICAL: Failed to close unprotected position after retries. Ticket=", ticket,
          ". Protection monitor will retry on the next tick.");
+
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+//| Virtual trailing guard key                                       |
+//+------------------------------------------------------------------+
+string VirtualTrailKey(const int ticket)
+  {
+   return("IDC_GOLD_NOWICK_SNIPER." +
+          IntegerToString(AccountNumber()) + "." +
+          Symbol() + "." +
+          IntegerToString(Period()) + "." +
+          IntegerToString(MagicNumber) + "." +
+          IntegerToString(ticket) + ".VIRTUAL_TRAIL_SL");
+  }
+
+//+------------------------------------------------------------------+
+//| Arm/update virtual protected stop                                |
+//+------------------------------------------------------------------+
+void ArmVirtualTrailingGuard(const int ticket, const int orderType, const double targetSL)
+  {
+   if(!EnableVirtualTrailingGuard)
+      return;
+
+   double normalizedTarget = NormalizePrice(targetSL);
+   string key = VirtualTrailKey(ticket);
+   bool shouldUpdate = true;
+
+   if(GlobalVariableCheck(key))
+     {
+      double currentTarget = NormalizePrice(GlobalVariableGet(key));
+      if(orderType == OP_BUY && normalizedTarget <= currentTarget)
+         shouldUpdate = false;
+      if(orderType == OP_SELL && normalizedTarget >= currentTarget)
+         shouldUpdate = false;
+     }
+
+   if(!shouldUpdate)
+      return;
+
+   GlobalVariableSet(key, normalizedTarget);
+   Print("Virtual trailing guard armed. Ticket=", ticket,
+         ", Type=", OrderTypeToText(orderType),
+         ", GuardPrice=", DoubleToString(normalizedTarget, Digits));
+  }
+
+//+------------------------------------------------------------------+
+//| Delete virtual protected stop                                    |
+//+------------------------------------------------------------------+
+void DeleteVirtualTrailingGuard(const int ticket)
+  {
+   string key = VirtualTrailKey(ticket);
+   if(GlobalVariableCheck(key))
+      GlobalVariableDel(key);
+  }
+
+//+------------------------------------------------------------------+
+//| Monitor virtual trailing guards and close on guard touch         |
+//+------------------------------------------------------------------+
+void ManageVirtualTrailingGuards()
+  {
+   if(!EnableVirtualTrailingGuard)
+      return;
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol())
+         continue;
+
+      int orderType = OrderType();
+      if(orderType != OP_BUY && orderType != OP_SELL)
+         continue;
+
+      int ticket = OrderTicket();
+      string key = VirtualTrailKey(ticket);
+      if(!GlobalVariableCheck(key))
+         continue;
+
+      double guardPrice = NormalizePrice(GlobalVariableGet(key));
+      RefreshRates();
+
+      bool shouldClose = false;
+      double closePrice = 0.0;
+
+      if(orderType == OP_BUY)
+        {
+         if(Bid <= guardPrice)
+           {
+            shouldClose = true;
+            closePrice = Bid;
+           }
+        }
+      else if(orderType == OP_SELL)
+        {
+         if(Ask >= guardPrice)
+           {
+            shouldClose = true;
+            closePrice = Ask;
+           }
+        }
+
+      if(!shouldClose)
+         continue;
+
+      Print("Virtual trailing guard touched. Ticket=", ticket,
+            ", Type=", OrderTypeToText(orderType),
+            ", GuardPrice=", DoubleToString(guardPrice, Digits),
+            ", ClosePrice=", DoubleToString(closePrice, Digits));
+
+      if(ClosePositionWithRetries(ticket, "virtual trailing guard"))
+         DeleteVirtualTrailingGuard(ticket);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Close position with retries                                      |
+//+------------------------------------------------------------------+
+bool ClosePositionWithRetries(const int ticket, const string context)
+  {
+   for(int attempt = 1; attempt <= ProtectionRetryCount; attempt++)
+     {
+      if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+        {
+         RefreshRates();
+         Sleep(150);
+         continue;
+        }
+
+      if(OrderCloseTime() > 0)
+         return(true);
+
+      int orderType = OrderType();
+      if(orderType != OP_BUY && orderType != OP_SELL)
+         return(false);
+
+      RefreshRates();
+      double closePrice = (orderType == OP_BUY) ? Bid : Ask;
+      int slippagePoints = PointsToBrokerPoints(Slippage);
+
+      ResetLastError();
+      bool closed = OrderClose(ticket, OrderLots(), NormalizePrice(closePrice), slippagePoints, clrYellow);
+      if(closed)
+        {
+         DeleteVirtualTrailingGuard(ticket);
+         return(true);
+        }
+
+      Print("Position close retry failed. Context=", context,
+            ", Ticket=", ticket,
+            ", Attempt=", attempt,
+            ", Error=", GetLastError());
+      Sleep(200);
+     }
+
+   Print("CRITICAL: Failed to close position after retries. Context=", context,
+         ", Ticket=", ticket,
+         ". EA will retry on the next tick if condition remains active.");
 
    return(false);
   }
@@ -1051,11 +1235,23 @@ void ManageTrailing()
            }
 
          newSL = NormalizePrice(newSL);
+         ArmVirtualTrailingGuard(OrderTicket(), orderType, newSL);
+
          if(currentSL != 0.0 && newSL <= currentSL)
             continue;
 
          if(CanPlaceStopLoss(orderType, newSL))
-            ModifyTrailingStop(newSL, clrLime);
+           {
+            if(!ModifyTrailingStop(newSL, clrLime))
+               ClosePositionWithRetries(OrderTicket(), "protected BUY trailing SL modify failure");
+           }
+         else
+           {
+            Print("Protected BUY trailing server SL is not legal; closing to prevent protected profit loss. Ticket=",
+                  OrderTicket(),
+                  ", TargetSL=", DoubleToString(newSL, Digits));
+            ClosePositionWithRetries(OrderTicket(), "protected BUY trailing SL not legal");
+           }
         }
       else if(orderType == OP_SELL)
         {
@@ -1071,11 +1267,23 @@ void ManageTrailing()
            }
 
          newSL = NormalizePrice(newSL);
+         ArmVirtualTrailingGuard(OrderTicket(), orderType, newSL);
+
          if(currentSL != 0.0 && newSL >= currentSL)
             continue;
 
          if(CanPlaceStopLoss(orderType, newSL))
-            ModifyTrailingStop(newSL, clrRed);
+           {
+            if(!ModifyTrailingStop(newSL, clrRed))
+               ClosePositionWithRetries(OrderTicket(), "protected SELL trailing SL modify failure");
+           }
+         else
+           {
+            Print("Protected SELL trailing server SL is not legal; closing to prevent protected profit loss. Ticket=",
+                  OrderTicket(),
+                  ", TargetSL=", DoubleToString(newSL, Digits));
+            ClosePositionWithRetries(OrderTicket(), "protected SELL trailing SL not legal");
+           }
         }
      }
   }
