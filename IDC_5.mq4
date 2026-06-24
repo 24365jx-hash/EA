@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.04"
+#property version   "1.05"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -11,11 +11,8 @@ input int    SlippagePoints           = 30;
 input int    StopLossPoints           = 200;
 input int    TrailingStartPoints      = 200;
 input int    TrailingStepPoints       = 10;
-input int    StructureSearchBars      = 120;
-input int    SwingDepthBars           = 3;
+input int    SetupLookbackBars        = 30;
 input int    MinFalseBreakoutPoints   = 1;
-input int    MaxLevelSweepPoints      = 80;
-input int    StructureBreakMinPoints  = 30;
 input int    MinTailPoints            = 30;
 input double MinSignalWickPercent     = 50.0;
 input bool   DebugSignalFilters       = true;
@@ -52,18 +49,12 @@ int OnInit()
       Print(EA_NAME, ": trailing values must be greater than zero.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(StructureSearchBars < 10)
+   if(SetupLookbackBars < 1)
    {
-      Print(EA_NAME, ": StructureSearchBars must be at least 10.");
+      Print(EA_NAME, ": SetupLookbackBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(SwingDepthBars < 1)
-   {
-      Print(EA_NAME, ": SwingDepthBars must be at least 1.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   if(MinFalseBreakoutPoints < 0 || MaxLevelSweepPoints < 0 ||
-      StructureBreakMinPoints < 0 || MinTailPoints < 0)
+   if(MinFalseBreakoutPoints < 0 || MinTailPoints < 0)
    {
       Print(EA_NAME, ": point filters cannot be negative.");
       return(INIT_PARAMETERS_INCORRECT);
@@ -98,7 +89,7 @@ void OnTick()
 
 void EvaluateClosedSetupCandle()
 {
-   int requiredBars = StructureSearchBars + SwingDepthBars + 5;
+   int requiredBars = SetupLookbackBars + 5;
    if(iBars(Symbol(), PERIOD_M1) < requiredBars)
       return;
 
@@ -114,28 +105,28 @@ void EvaluateClosedSetupCandle()
          return;
    }
 
-   double previousSwingLow = 0.0;
-   if(FindBearishStructureReferenceLow(previousSwingLow) && IsBuySetupAtLevel(previousSwingLow))
+   double lookbackLow = 0.0;
+   if(FindLookbackLowestLow(lookbackLow) && IsBuySetupAtLevel(lookbackLow))
    {
       if(IsBuyColorCandle(1))
          OpenTrade(OP_BUY);
-      else
+      else if(ShouldWaitForBuyColor(1))
          StartPendingEntry(OP_BUY);
       return;
    }
    else
-      DebugSignal("BUY blocked: bearish structure or strict false-breakout setup not found.");
+      DebugSignal("BUY blocked: lookback low strict false-breakout setup not found.");
 
-   double previousSwingHigh = 0.0;
-   if(FindBullishStructureReferenceHigh(previousSwingHigh) && IsSellSetupAtLevel(previousSwingHigh))
+   double lookbackHigh = 0.0;
+   if(FindLookbackHighestHigh(lookbackHigh) && IsSellSetupAtLevel(lookbackHigh))
    {
       if(IsSellColorCandle(1))
          OpenTrade(OP_SELL);
-      else
+      else if(ShouldWaitForSellColor(1))
          StartPendingEntry(OP_SELL);
    }
    else
-      DebugSignal("SELL blocked: bullish structure or strict false-breakout setup not found.");
+      DebugSignal("SELL blocked: lookback high strict false-breakout setup not found.");
 }
 
 bool HasPendingEntry()
@@ -192,179 +183,33 @@ bool ProcessPendingEntry()
    return(false);
 }
 
-bool FindBearishStructureReferenceLow(double &level)
+bool FindLookbackLowestLow(double &level)
 {
-   int latestLowShift = -1;
-   int previousLowShift = -1;
-   int latestHighShift = -1;
-   int previousHighShift = -1;
-
-   if(!FindRecentSwingLows(latestLowShift, previousLowShift))
-      return(false);
-   if(!FindRecentSwingHighs(latestHighShift, previousHighShift))
+   if(iBars(Symbol(), PERIOD_M1) < SetupLookbackBars + 2)
       return(false);
 
-   if(!IsBearishSwingSequence(latestLowShift, previousLowShift, latestHighShift, previousHighShift))
-      return(false);
-
-   double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
-   double previousLow = iLow(Symbol(), PERIOD_M1, previousLowShift);
-   double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
-   double previousHigh = iHigh(Symbol(), PERIOD_M1, previousHighShift);
-   double minimumBreak = StructureBreakMinPoints * Point;
-
-   if(latestLow >= previousLow - minimumBreak)
-      return(false);
-   if(latestHigh >= previousHigh - minimumBreak)
-      return(false);
-   if(HasClosedBelowLevelAfterSwing(latestLowShift, latestLow))
-      return(false);
-
-   level = latestLow;
-   return(true);
-}
-
-bool FindBullishStructureReferenceHigh(double &level)
-{
-   int latestHighShift = -1;
-   int previousHighShift = -1;
-   int latestLowShift = -1;
-   int previousLowShift = -1;
-
-   if(!FindRecentSwingHighs(latestHighShift, previousHighShift))
-      return(false);
-   if(!FindRecentSwingLows(latestLowShift, previousLowShift))
-      return(false);
-
-   if(!IsBullishSwingSequence(latestHighShift, previousHighShift, latestLowShift, previousLowShift))
-      return(false);
-
-   double latestHigh = iHigh(Symbol(), PERIOD_M1, latestHighShift);
-   double previousHigh = iHigh(Symbol(), PERIOD_M1, previousHighShift);
-   double latestLow = iLow(Symbol(), PERIOD_M1, latestLowShift);
-   double previousLow = iLow(Symbol(), PERIOD_M1, previousLowShift);
-   double minimumBreak = StructureBreakMinPoints * Point;
-
-   if(latestHigh <= previousHigh + minimumBreak)
-      return(false);
-   if(latestLow <= previousLow + minimumBreak)
-      return(false);
-   if(HasClosedAboveLevelAfterSwing(latestHighShift, latestHigh))
-      return(false);
-
-   level = latestHigh;
-   return(true);
-}
-
-bool HasClosedBelowLevelAfterSwing(int swingShift, double level)
-{
-   for(int shift = swingShift - 1; shift >= 2; shift--)
+   level = iLow(Symbol(), PERIOD_M1, 2);
+   for(int shift = 3; shift <= SetupLookbackBars + 1; shift++)
    {
-      if(iClose(Symbol(), PERIOD_M1, shift) < level)
-         return(true);
-   }
-
-   return(false);
-}
-
-bool HasClosedAboveLevelAfterSwing(int swingShift, double level)
-{
-   for(int shift = swingShift - 1; shift >= 2; shift--)
-   {
-      if(iClose(Symbol(), PERIOD_M1, shift) > level)
-         return(true);
-   }
-
-   return(false);
-}
-
-bool IsBearishSwingSequence(int latestLowShift, int previousLowShift,
-                            int latestHighShift, int previousHighShift)
-{
-   return(previousHighShift > previousLowShift &&
-          previousLowShift > latestHighShift &&
-          latestHighShift > latestLowShift);
-}
-
-bool IsBullishSwingSequence(int latestHighShift, int previousHighShift,
-                            int latestLowShift, int previousLowShift)
-{
-   return(previousLowShift > previousHighShift &&
-          previousHighShift > latestLowShift &&
-          latestLowShift > latestHighShift);
-}
-
-bool FindRecentSwingLows(int &latestShift, int &previousShift)
-{
-   int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = 1 + SwingDepthBars;
-   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
-   {
-      if(!IsSwingLow(shift))
-         continue;
-
-      if(latestShift < 0)
-         latestShift = shift;
-      else
-      {
-         previousShift = shift;
-         return(true);
-      }
-   }
-
-   return(false);
-}
-
-bool FindRecentSwingHighs(int &latestShift, int &previousShift)
-{
-   int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = 1 + SwingDepthBars;
-   int lastShift = (int)MathMin(StructureSearchBars, bars - SwingDepthBars - 1);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
-   {
-      if(!IsSwingHigh(shift))
-         continue;
-
-      if(latestShift < 0)
-         latestShift = shift;
-      else
-      {
-         previousShift = shift;
-         return(true);
-      }
-   }
-
-   return(false);
-}
-
-bool IsSwingLow(int shift)
-{
-   double pivotLow = iLow(Symbol(), PERIOD_M1, shift);
-
-   for(int offset = 1; offset <= SwingDepthBars; offset++)
-   {
-      if(iLow(Symbol(), PERIOD_M1, shift - offset) <= pivotLow)
-         return(false);
-      if(iLow(Symbol(), PERIOD_M1, shift + offset) <= pivotLow)
-         return(false);
+      double candleLow = iLow(Symbol(), PERIOD_M1, shift);
+      if(candleLow < level)
+         level = candleLow;
    }
 
    return(true);
 }
 
-bool IsSwingHigh(int shift)
+bool FindLookbackHighestHigh(double &level)
 {
-   double pivotHigh = iHigh(Symbol(), PERIOD_M1, shift);
+   if(iBars(Symbol(), PERIOD_M1) < SetupLookbackBars + 2)
+      return(false);
 
-   for(int offset = 1; offset <= SwingDepthBars; offset++)
+   level = iHigh(Symbol(), PERIOD_M1, 2);
+   for(int shift = 3; shift <= SetupLookbackBars + 1; shift++)
    {
-      if(iHigh(Symbol(), PERIOD_M1, shift - offset) >= pivotHigh)
-         return(false);
-      if(iHigh(Symbol(), PERIOD_M1, shift + offset) >= pivotHigh)
-         return(false);
+      double candleHigh = iHigh(Symbol(), PERIOD_M1, shift);
+      if(candleHigh > level)
+         level = candleHigh;
    }
 
    return(true);
@@ -376,11 +221,8 @@ bool IsBuySetupAtLevel(double support)
    double setupLow = iLow(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double minPierce = MinFalseBreakoutPoints * Point;
-   double maxSweep = MaxLevelSweepPoints * Point;
 
    if(setupLow > support - minPierce)
-      return(false);
-   if(support - setupLow > maxSweep)
       return(false);
    if(setupClose <= support)
       return(false);
@@ -394,11 +236,8 @@ bool IsSellSetupAtLevel(double resistance)
    double setupHigh = iHigh(Symbol(), PERIOD_M1, shift);
    double setupClose = iClose(Symbol(), PERIOD_M1, shift);
    double minPierce = MinFalseBreakoutPoints * Point;
-   double maxSweep = MaxLevelSweepPoints * Point;
 
    if(setupHigh < resistance + minPierce)
-      return(false);
-   if(setupHigh - resistance > maxSweep)
       return(false);
    if(setupClose >= resistance)
       return(false);
@@ -454,6 +293,55 @@ bool IsBuyColorCandle(int shift)
 bool IsSellColorCandle(int shift)
 {
    return(iClose(Symbol(), PERIOD_M1, shift) < iOpen(Symbol(), PERIOD_M1, shift));
+}
+
+bool IsDojiCandle(int shift)
+{
+   return(iClose(Symbol(), PERIOD_M1, shift) == iOpen(Symbol(), PERIOD_M1, shift));
+}
+
+bool IsBullishShapeDoji(int shift)
+{
+   if(!IsDojiCandle(shift))
+      return(false);
+
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
+   double upperWick = highPrice - openPrice;
+   double lowerWick = openPrice - lowPrice;
+
+   return(upperWick < lowerWick);
+}
+
+bool IsBearishShapeDoji(int shift)
+{
+   if(!IsDojiCandle(shift))
+      return(false);
+
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
+   double upperWick = highPrice - openPrice;
+   double lowerWick = openPrice - lowPrice;
+
+   return(upperWick > lowerWick);
+}
+
+bool ShouldWaitForBuyColor(int shift)
+{
+   if(IsSellColorCandle(shift))
+      return(true);
+
+   return(IsBullishShapeDoji(shift));
+}
+
+bool ShouldWaitForSellColor(int shift)
+{
+   if(IsBuyColorCandle(shift))
+      return(true);
+
+   return(IsBearishShapeDoji(shift));
 }
 
 void OpenTrade(int orderType)
