@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.05"
+#property version   "1.06"
 #property description "GOLD M1 structure breakout failure pinbar strategy"
 
 input double Lots                     = 0.10;
@@ -11,7 +11,7 @@ input int    SlippagePoints           = 30;
 input int    StopLossPoints           = 200;
 input int    TrailingStartPoints      = 200;
 input int    TrailingStepPoints       = 10;
-input int    SetupLookbackBars        = 30;
+input int    SwingDepthBars           = 3;
 input int    MinFalseBreakoutPoints   = 1;
 input int    MinTailPoints            = 30;
 input double MinSignalWickPercent     = 50.0;
@@ -49,9 +49,9 @@ int OnInit()
       Print(EA_NAME, ": trailing values must be greater than zero.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(SetupLookbackBars < 1)
+   if(SwingDepthBars < 1)
    {
-      Print(EA_NAME, ": SetupLookbackBars must be at least 1.");
+      Print(EA_NAME, ": SwingDepthBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(MinFalseBreakoutPoints < 0 || MinTailPoints < 0)
@@ -89,7 +89,7 @@ void OnTick()
 
 void EvaluateClosedSetupCandle()
 {
-   int requiredBars = SetupLookbackBars + 5;
+   int requiredBars = SwingDepthBars * 2 + 5;
    if(iBars(Symbol(), PERIOD_M1) < requiredBars)
       return;
 
@@ -105,8 +105,8 @@ void EvaluateClosedSetupCandle()
          return;
    }
 
-   double lookbackLow = 0.0;
-   if(FindLookbackLowestLow(lookbackLow) && IsBuySetupAtLevel(lookbackLow))
+   double swingLow = 0.0;
+   if(FindMostRecentSwingLow(swingLow) && IsBuySetupAtLevel(swingLow))
    {
       if(IsBuyColorCandle(1))
          OpenTrade(OP_BUY);
@@ -115,10 +115,10 @@ void EvaluateClosedSetupCandle()
       return;
    }
    else
-      DebugSignal("BUY blocked: lookback low strict false-breakout setup not found.");
+      DebugSignal("BUY blocked: swing low strict false-breakout setup not found.");
 
-   double lookbackHigh = 0.0;
-   if(FindLookbackHighestHigh(lookbackHigh) && IsSellSetupAtLevel(lookbackHigh))
+   double swingHigh = 0.0;
+   if(FindMostRecentSwingHigh(swingHigh) && IsSellSetupAtLevel(swingHigh))
    {
       if(IsSellColorCandle(1))
          OpenTrade(OP_SELL);
@@ -126,7 +126,7 @@ void EvaluateClosedSetupCandle()
          StartPendingEntry(OP_SELL);
    }
    else
-      DebugSignal("SELL blocked: lookback high strict false-breakout setup not found.");
+      DebugSignal("SELL blocked: swing high strict false-breakout setup not found.");
 }
 
 bool HasPendingEntry()
@@ -183,33 +183,73 @@ bool ProcessPendingEntry()
    return(false);
 }
 
-bool FindLookbackLowestLow(double &level)
+bool FindMostRecentSwingLow(double &level)
 {
-   if(iBars(Symbol(), PERIOD_M1) < SetupLookbackBars + 2)
+   int bars = iBars(Symbol(), PERIOD_M1);
+   int firstShift = 2 + SwingDepthBars;
+   int lastShift = bars - SwingDepthBars - 1;
+
+   if(lastShift < firstShift)
       return(false);
 
-   level = iLow(Symbol(), PERIOD_M1, 2);
-   for(int shift = 3; shift <= SetupLookbackBars + 1; shift++)
+   for(int shift = firstShift; shift <= lastShift; shift++)
    {
-      double candleLow = iLow(Symbol(), PERIOD_M1, shift);
-      if(candleLow < level)
-         level = candleLow;
+      if(IsSwingLow(shift))
+      {
+         level = iLow(Symbol(), PERIOD_M1, shift);
+         return(true);
+      }
+   }
+
+   return(false);
+}
+
+bool FindMostRecentSwingHigh(double &level)
+{
+   int bars = iBars(Symbol(), PERIOD_M1);
+   int firstShift = 2 + SwingDepthBars;
+   int lastShift = bars - SwingDepthBars - 1;
+
+   if(lastShift < firstShift)
+      return(false);
+
+   for(int shift = firstShift; shift <= lastShift; shift++)
+   {
+      if(IsSwingHigh(shift))
+      {
+         level = iHigh(Symbol(), PERIOD_M1, shift);
+         return(true);
+      }
+   }
+
+   return(false);
+}
+
+bool IsSwingLow(int shift)
+{
+   double pivotLow = iLow(Symbol(), PERIOD_M1, shift);
+
+   for(int offset = 1; offset <= SwingDepthBars; offset++)
+   {
+      if(iLow(Symbol(), PERIOD_M1, shift - offset) <= pivotLow)
+         return(false);
+      if(iLow(Symbol(), PERIOD_M1, shift + offset) <= pivotLow)
+         return(false);
    }
 
    return(true);
 }
 
-bool FindLookbackHighestHigh(double &level)
+bool IsSwingHigh(int shift)
 {
-   if(iBars(Symbol(), PERIOD_M1) < SetupLookbackBars + 2)
-      return(false);
+   double pivotHigh = iHigh(Symbol(), PERIOD_M1, shift);
 
-   level = iHigh(Symbol(), PERIOD_M1, 2);
-   for(int shift = 3; shift <= SetupLookbackBars + 1; shift++)
+   for(int offset = 1; offset <= SwingDepthBars; offset++)
    {
-      double candleHigh = iHigh(Symbol(), PERIOD_M1, shift);
-      if(candleHigh > level)
-         level = candleHigh;
+      if(iHigh(Symbol(), PERIOD_M1, shift - offset) >= pivotHigh)
+         return(false);
+      if(iHigh(Symbol(), PERIOD_M1, shift + offset) >= pivotHigh)
+         return(false);
    }
 
    return(true);
