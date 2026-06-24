@@ -2,8 +2,8 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "1.06"
-#property description "GOLD M1 structure breakout failure pinbar strategy"
+#property version   "1.07"
+#property description "GOLD M1 strict swing false-breakout pinbar strategy"
 
 input double Lots                     = 0.10;
 input int    MagicNumber              = 505;
@@ -12,6 +12,7 @@ input int    StopLossPoints           = 200;
 input int    TrailingStartPoints      = 200;
 input int    TrailingStepPoints       = 10;
 input int    SwingDepthBars           = 3;
+input int    SwingSearchBars          = 120;
 input int    MinFalseBreakoutPoints   = 1;
 input int    MinTailPoints            = 30;
 input double MinSignalWickPercent     = 50.0;
@@ -21,6 +22,10 @@ string EA_NAME = "IDC_5";
 datetime lastM1BarTime = 0;
 int pendingEntryType = -1;
 int pendingEntryBarsRemaining = 0;
+double pendingReferenceLevel = 0.0;
+datetime pendingReferenceTime = 0;
+int lastTradedType = -1;
+datetime lastTradedReferenceTime = 0;
 
 int OnInit()
 {
@@ -54,9 +59,14 @@ int OnInit()
       Print(EA_NAME, ": SwingDepthBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(MinFalseBreakoutPoints < 0 || MinTailPoints < 0)
+   if(SwingSearchBars < 1)
    {
-      Print(EA_NAME, ": point filters cannot be negative.");
+      Print(EA_NAME, ": SwingSearchBars must be at least 1.");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   if(MinFalseBreakoutPoints < 1 || MinTailPoints < 0)
+   {
+      Print(EA_NAME, ": MinFalseBreakoutPoints must be >= 1 and MinTailPoints cannot be negative.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(MinSignalWickPercent <= 0.0 || MinSignalWickPercent > 100.0)
@@ -89,13 +99,17 @@ void OnTick()
 
 void EvaluateClosedSetupCandle()
 {
-   int requiredBars = SwingDepthBars * 2 + 5;
+   int requiredBars = SwingDepthBars * 2 + SwingSearchBars + 5;
    if(iBars(Symbol(), PERIOD_M1) < requiredBars)
+   {
+      DebugSignal("blocked: not enough M1 bars for swing search.");
       return;
+   }
 
    if(CountOpenPositions() > 0)
    {
       ClearPendingEntry();
+      DebugSignal("blocked: existing position for symbol/magic.");
       return;
    }
 
@@ -106,45 +120,127 @@ void EvaluateClosedSetupCandle()
    }
 
    double swingLow = 0.0;
-   if(FindMostRecentSwingLow(swingLow) && IsBuySetupAtLevel(swingLow))
+   datetime swingLowTime = 0;
+   if(FindMostRecentValidSwingLow(swingLow, swingLowTime) && IsBuySetupAtLevel(swingLow))
    {
+      if(WasReferenceTraded(OP_BUY, swingLowTime))
+      {
+         DebugSignal("BUY blocked: same swing low reference already traded.");
+         return;
+      }
+
       if(IsBuyColorCandle(1))
-         OpenTrade(OP_BUY);
+      {
+         if(OpenTrade(OP_BUY))
+            MarkReferenceTraded(OP_BUY, swingLowTime);
+      }
       else if(ShouldWaitForBuyColor(1))
-         StartPendingEntry(OP_BUY);
+         StartPendingEntry(OP_BUY, swingLow, swingLowTime);
+      else
+         DebugSignal("BUY blocked: setup candle is unsupported doji for buy color rule.");
       return;
    }
-   else
-      DebugSignal("BUY blocked: swing low strict false-breakout setup not found.");
 
    double swingHigh = 0.0;
-   if(FindMostRecentSwingHigh(swingHigh) && IsSellSetupAtLevel(swingHigh))
+   datetime swingHighTime = 0;
+   if(FindMostRecentValidSwingHigh(swingHigh, swingHighTime) && IsSellSetupAtLevel(swingHigh))
    {
+      if(WasReferenceTraded(OP_SELL, swingHighTime))
+      {
+         DebugSignal("SELL blocked: same swing high reference already traded.");
+         return;
+      }
+
       if(IsSellColorCandle(1))
-         OpenTrade(OP_SELL);
+      {
+         if(OpenTrade(OP_SELL))
+            MarkReferenceTraded(OP_SELL, swingHighTime);
+      }
       else if(ShouldWaitForSellColor(1))
-         StartPendingEntry(OP_SELL);
+         StartPendingEntry(OP_SELL, swingHigh, swingHighTime);
+      else
+         DebugSignal("SELL blocked: setup candle is unsupported doji for sell color rule.");
+      return;
    }
-   else
-      DebugSignal("SELL blocked: swing high strict false-breakout setup not found.");
 }
 
 bool HasPendingEntry()
 {
    return((pendingEntryType == OP_BUY || pendingEntryType == OP_SELL) &&
-          pendingEntryBarsRemaining > 0);
+          pendingEntryBarsRemaining > 0 && pendingReferenceTime > 0);
 }
 
-void StartPendingEntry(int orderType)
+void StartPendingEntry(int orderType, double referenceLevel, datetime referenceTime)
 {
    pendingEntryType = orderType;
    pendingEntryBarsRemaining = 2;
+   pendingReferenceLevel = referenceLevel;
+   pendingReferenceTime = referenceTime;
+   DebugSignal(StringFormat("pending %s started. reference=%s barsRemaining=%d",
+                            OrderTypeName(orderType), PriceText(referenceLevel), pendingEntryBarsRemaining));
 }
 
 void ClearPendingEntry()
 {
    pendingEntryType = -1;
    pendingEntryBarsRemaining = 0;
+   pendingReferenceLevel = 0.0;
+   pendingReferenceTime = 0;
+}
+
+bool ProcessPendingEntry()
+{
+   if(pendingEntryType == OP_BUY)
+   {
+      if(iClose(Symbol(), PERIOD_M1, 1) <= pendingReferenceLevel)
+      {
+         DebugSignal("pending BUY cancelled: candle closed back below/equal reference swing low.");
+         ClearPendingEntry();
+         return(false);
+      }
+      if(IsBuyColorCandle(1))
+      {
+         datetime referenceTime = pendingReferenceTime;
+         ClearPendingEntry();
+         if(OpenTrade(OP_BUY))
+            MarkReferenceTraded(OP_BUY, referenceTime);
+         return(true);
+      }
+   }
+   else if(pendingEntryType == OP_SELL)
+   {
+      if(iClose(Symbol(), PERIOD_M1, 1) >= pendingReferenceLevel)
+      {
+         DebugSignal("pending SELL cancelled: candle closed back above/equal reference swing high.");
+         ClearPendingEntry();
+         return(false);
+      }
+      if(IsSellColorCandle(1))
+      {
+         datetime referenceTime = pendingReferenceTime;
+         ClearPendingEntry();
+         if(OpenTrade(OP_SELL))
+            MarkReferenceTraded(OP_SELL, referenceTime);
+         return(true);
+      }
+   }
+   else
+   {
+      ClearPendingEntry();
+      return(false);
+   }
+
+   pendingEntryBarsRemaining--;
+   if(pendingEntryBarsRemaining > 0)
+   {
+      DebugSignal(StringFormat("pending %s waiting. barsRemaining=%d",
+                               OrderTypeName(pendingEntryType), pendingEntryBarsRemaining));
+      return(true);
+   }
+
+   DebugSignal(StringFormat("pending %s expired.", OrderTypeName(pendingEntryType)));
+   ClearPendingEntry();
+   return(false);
 }
 
 void DebugSignal(string message)
@@ -153,73 +249,91 @@ void DebugSignal(string message)
       Print(EA_NAME, ": ", message);
 }
 
-bool ProcessPendingEntry()
-{
-   bool confirmed = false;
-
-   if(pendingEntryType == OP_BUY)
-      confirmed = IsBuyColorCandle(1);
-   else if(pendingEntryType == OP_SELL)
-      confirmed = IsSellColorCandle(1);
-   else
-   {
-      ClearPendingEntry();
-      return(false);
-   }
-
-   if(confirmed)
-   {
-      int orderType = pendingEntryType;
-      ClearPendingEntry();
-      OpenTrade(orderType);
-      return(true);
-   }
-
-   pendingEntryBarsRemaining--;
-   if(pendingEntryBarsRemaining > 0)
-      return(true);
-
-   ClearPendingEntry();
-   return(false);
-}
-
-bool FindMostRecentSwingLow(double &level)
+bool FindMostRecentValidSwingLow(double &level, datetime &swingTime)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
    int firstShift = 2 + SwingDepthBars;
-   int lastShift = bars - SwingDepthBars - 1;
+   int maxShift = MathMin(firstShift + SwingSearchBars - 1, bars - SwingDepthBars - 1);
 
-   if(lastShift < firstShift)
-      return(false);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
+   if(maxShift < firstShift)
    {
-      if(IsSwingLow(shift))
+      DebugSignal("BUY blocked: no searchable swing-low range.");
+      return(false);
+   }
+
+   for(int shift = firstShift; shift <= maxShift; shift++)
+   {
+      if(!IsSwingLow(shift))
+         continue;
+
+      level = iLow(Symbol(), PERIOD_M1, shift);
+      swingTime = iTime(Symbol(), PERIOD_M1, shift);
+
+      if(HasClosedBelowLevelAfterSwing(shift, level))
       {
-         level = iLow(Symbol(), PERIOD_M1, shift);
-         return(true);
+         DebugSignal(StringFormat("BUY blocked: most recent swing low invalidated by close below. level=%s time=%s",
+                                  PriceText(level), TimeToString(swingTime, TIME_DATE|TIME_MINUTES)));
+         return(false);
       }
+
+      return(true);
+   }
+
+   DebugSignal("BUY blocked: no confirmed swing low found.");
+   return(false);
+}
+
+bool FindMostRecentValidSwingHigh(double &level, datetime &swingTime)
+{
+   int bars = iBars(Symbol(), PERIOD_M1);
+   int firstShift = 2 + SwingDepthBars;
+   int maxShift = MathMin(firstShift + SwingSearchBars - 1, bars - SwingDepthBars - 1);
+
+   if(maxShift < firstShift)
+   {
+      DebugSignal("SELL blocked: no searchable swing-high range.");
+      return(false);
+   }
+
+   for(int shift = firstShift; shift <= maxShift; shift++)
+   {
+      if(!IsSwingHigh(shift))
+         continue;
+
+      level = iHigh(Symbol(), PERIOD_M1, shift);
+      swingTime = iTime(Symbol(), PERIOD_M1, shift);
+
+      if(HasClosedAboveLevelAfterSwing(shift, level))
+      {
+         DebugSignal(StringFormat("SELL blocked: most recent swing high invalidated by close above. level=%s time=%s",
+                                  PriceText(level), TimeToString(swingTime, TIME_DATE|TIME_MINUTES)));
+         return(false);
+      }
+
+      return(true);
+   }
+
+   DebugSignal("SELL blocked: no confirmed swing high found.");
+   return(false);
+}
+
+bool HasClosedBelowLevelAfterSwing(int swingShift, double level)
+{
+   for(int shift = swingShift - 1; shift >= 2; shift--)
+   {
+      if(iClose(Symbol(), PERIOD_M1, shift) < level)
+         return(true);
    }
 
    return(false);
 }
 
-bool FindMostRecentSwingHigh(double &level)
+bool HasClosedAboveLevelAfterSwing(int swingShift, double level)
 {
-   int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = 2 + SwingDepthBars;
-   int lastShift = bars - SwingDepthBars - 1;
-
-   if(lastShift < firstShift)
-      return(false);
-
-   for(int shift = firstShift; shift <= lastShift; shift++)
+   for(int shift = swingShift - 1; shift >= 2; shift--)
    {
-      if(IsSwingHigh(shift))
-      {
-         level = iHigh(Symbol(), PERIOD_M1, shift);
+      if(iClose(Symbol(), PERIOD_M1, shift) > level)
          return(true);
-      }
    }
 
    return(false);
@@ -263,9 +377,17 @@ bool IsBuySetupAtLevel(double support)
    double minPierce = MinFalseBreakoutPoints * Point;
 
    if(setupLow > support - minPierce)
+   {
+      DebugSignal(StringFormat("BUY blocked: setup low did not pierce swing low. setupLow=%s level=%s minPierce=%d",
+                               PriceText(setupLow), PriceText(support), MinFalseBreakoutPoints));
       return(false);
+   }
    if(setupClose <= support)
+   {
+      DebugSignal(StringFormat("BUY blocked: setup close not back above swing low. close=%s level=%s",
+                               PriceText(setupClose), PriceText(support)));
       return(false);
+   }
 
    return(IsLongLowerWick(shift));
 }
@@ -278,9 +400,17 @@ bool IsSellSetupAtLevel(double resistance)
    double minPierce = MinFalseBreakoutPoints * Point;
 
    if(setupHigh < resistance + minPierce)
+   {
+      DebugSignal(StringFormat("SELL blocked: setup high did not pierce swing high. setupHigh=%s level=%s minPierce=%d",
+                               PriceText(setupHigh), PriceText(resistance), MinFalseBreakoutPoints));
       return(false);
+   }
    if(setupClose >= resistance)
+   {
+      DebugSignal(StringFormat("SELL blocked: setup close not back below swing high. close=%s level=%s",
+                               PriceText(setupClose), PriceText(resistance)));
       return(false);
+   }
 
    return(IsLongUpperWick(shift));
 }
@@ -291,11 +421,10 @@ bool IsLongLowerWick(int shift)
    double closePrice = iClose(Symbol(), PERIOD_M1, shift);
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
-
    double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
    double candleRange = highPrice - lowPrice;
 
-   return(IsLongSetupWick(lowerWick, candleRange));
+   return(IsLongSetupWick(lowerWick, candleRange, "BUY"));
 }
 
 bool IsLongUpperWick(int shift)
@@ -304,23 +433,34 @@ bool IsLongUpperWick(int shift)
    double closePrice = iClose(Symbol(), PERIOD_M1, shift);
    double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
    double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
-
    double upperWick = highPrice - MathMax(openPrice, closePrice);
    double candleRange = highPrice - lowPrice;
 
-   return(IsLongSetupWick(upperWick, candleRange));
+   return(IsLongSetupWick(upperWick, candleRange, "SELL"));
 }
 
-bool IsLongSetupWick(double signalWick, double candleRange)
+bool IsLongSetupWick(double signalWick, double candleRange, string side)
 {
    if(signalWick < MinTailPoints * Point)
+   {
+      DebugSignal(StringFormat("%s blocked: signal wick shorter than MinTailPoints. wickPoints=%s min=%d",
+                               side, DoubleToString(signalWick / Point, 1), MinTailPoints));
       return(false);
+   }
 
    if(candleRange <= 0.0)
+   {
+      DebugSignal(StringFormat("%s blocked: candle range is zero.", side));
       return(false);
+   }
 
-   if(signalWick * 100.0 < candleRange * MinSignalWickPercent)
+   double wickPercent = signalWick * 100.0 / candleRange;
+   if(wickPercent < MinSignalWickPercent)
+   {
+      DebugSignal(StringFormat("%s blocked: signal wick percent too small. wickPercent=%s min=%s",
+                               side, DoubleToString(wickPercent, 1), DoubleToString(MinSignalWickPercent, 1)));
       return(false);
+   }
 
    return(true);
 }
@@ -384,7 +524,18 @@ bool ShouldWaitForSellColor(int shift)
    return(IsBearishShapeDoji(shift));
 }
 
-void OpenTrade(int orderType)
+bool WasReferenceTraded(int orderType, datetime referenceTime)
+{
+   return(lastTradedType == orderType && lastTradedReferenceTime == referenceTime);
+}
+
+void MarkReferenceTraded(int orderType, datetime referenceTime)
+{
+   lastTradedType = orderType;
+   lastTradedReferenceTime = referenceTime;
+}
+
+bool OpenTrade(int orderType)
 {
    RefreshRates();
 
@@ -406,12 +557,18 @@ void OpenTrade(int orderType)
       arrowColor = clrRed;
    }
    else
-      return;
+      return(false);
 
+   ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, volume, openPrice, SlippagePoints,
                           stopLoss, 0.0, EA_NAME, MagicNumber, 0, arrowColor);
    if(ticket < 0)
-      Print(EA_NAME, ": OrderSend failed. type=", orderType, " error=", GetLastError());
+   {
+      Print(EA_NAME, ": OrderSend failed. type=", OrderTypeName(orderType), " error=", GetLastError());
+      return(false);
+   }
+
+   return(true);
 }
 
 double NormalizeVolume(double requestedLots)
@@ -484,6 +641,7 @@ void TrailBuyOrder()
    if(OrderStopLoss() != 0.0 && newStopLoss <= OrderStopLoss() + Point * 0.5)
       return;
 
+   ResetLastError();
    if(!OrderModify(OrderTicket(), OrderOpenPrice(), newStopLoss, 0.0, 0, clrLime))
       Print(EA_NAME, ": BUY trailing OrderModify failed. ticket=", OrderTicket(), " error=", GetLastError());
 }
@@ -502,6 +660,21 @@ void TrailSellOrder()
    if(OrderStopLoss() != 0.0 && newStopLoss >= OrderStopLoss() - Point * 0.5)
       return;
 
+   ResetLastError();
    if(!OrderModify(OrderTicket(), OrderOpenPrice(), newStopLoss, 0.0, 0, clrRed))
       Print(EA_NAME, ": SELL trailing OrderModify failed. ticket=", OrderTicket(), " error=", GetLastError());
+}
+
+string PriceText(double price)
+{
+   return(DoubleToString(price, Digits));
+}
+
+string OrderTypeName(int orderType)
+{
+   if(orderType == OP_BUY)
+      return("BUY");
+   if(orderType == OP_SELL)
+      return("SELL");
+   return("UNKNOWN");
 }
