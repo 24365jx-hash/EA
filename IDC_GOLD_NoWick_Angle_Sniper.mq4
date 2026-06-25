@@ -3,7 +3,7 @@
 //|                        No-Wick Angle Sniper strategy for MT4      |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.04"
+#property version   "1.05"
 #property description "IDC_GOLD No-Wick Angle Sniper EA"
 
 #define IDC_PI 3.14159265358979323846
@@ -18,6 +18,7 @@ input int    Max_Setup_Candles = 20;
 input double EMA_Angle_Threshold = 10.0;
 input int    EMA_Angle_Lookback_Bars = 3;
 input int    Min_Body_Points = 50;         // Gold: 50 points = 0.50 minimum setup candle body.
+input int    Pre_Setup_Confirm_Candles = 2; // 0=off, N=previous N candles must confirm setup direction.
 input double Max_Wick_Percentage = 20.0;
 input int    ZeroWick_Tolerance_Points = 2; // Treat tiny visual/noise wicks as zero. Gold: 2 points = 0.02 price.
 input int    StopLoss_Points = 200;       // Gold standard: 200 points = 2.00 price.
@@ -77,6 +78,7 @@ int OnInit()
          ", MaxWickPct=", DoubleToString(Max_Wick_Percentage, 2),
          ", MinBodyPoints=", Min_Body_Points,
          ", MinBodyPrice=", DoubleToString(PointsToPrice(Min_Body_Points), Digits),
+         ", PreSetupConfirmCandles=", Pre_Setup_Confirm_Candles,
          ", ZeroWickTolerancePoints=", ZeroWick_Tolerance_Points,
          ", ZeroWickTolerancePrice=", DoubleToString(ZeroWickTolerancePrice(), Digits),
          ", AngleThreshold=", DoubleToString(EMA_Angle_Threshold, 2),
@@ -161,6 +163,11 @@ bool ValidateInputs()
    if(Min_Body_Points < 0)
      {
       Print("Invalid Min_Body_Points. It must be zero or greater.");
+      return(false);
+     }
+   if(Pre_Setup_Confirm_Candles < 0)
+     {
+      Print("Invalid Pre_Setup_Confirm_Candles. It must be zero or greater.");
       return(false);
      }
    if(Max_Wick_Percentage < 0.0 || Max_Wick_Percentage > 100.0)
@@ -531,6 +538,103 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
   }
 
 //+------------------------------------------------------------------+
+//| Previous setup-direction candle confirmation                     |
+//+------------------------------------------------------------------+
+bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string &reason)
+  {
+   reason = "";
+
+   if(Pre_Setup_Confirm_Candles <= 0)
+      return(true);
+
+   for(int offset = 1; offset <= Pre_Setup_Confirm_Candles; offset++)
+     {
+      int index = setupIndex + offset;
+      if(Bars <= index)
+        {
+         reason = "not enough bars for previous candle confirmation. RequiredPreviousCandles=" +
+                  IntegerToString(Pre_Setup_Confirm_Candles);
+         return(false);
+        }
+
+      double open = NormalizePrice(Open[index]);
+      double close = NormalizePrice(Close[index]);
+      double high = NormalizePrice(High[index]);
+      double low = NormalizePrice(Low[index]);
+      double fullSize = NormalizePrice(high - low);
+      if(fullSize <= 0.0)
+        {
+         reason = "previous confirmation candle full size is zero. " + CandleMetricsText(index);
+         return(false);
+        }
+
+      double bodySize = MathAbs(close - open);
+      if(bodySize <= 0.0)
+        {
+         reason = "previous confirmation candle is doji. " + CandleMetricsText(index);
+         return(false);
+        }
+
+      double upperWick = NormalizePrice(high - MathMax(open, close));
+      double lowerWick = NormalizePrice(MathMin(open, close) - low);
+      double totalWick = NormalizePrice(upperWick + lowerWick);
+
+      if(!PriceExceeds(bodySize, totalWick))
+        {
+         reason = "previous confirmation candle body must be longer than total wicks. BodySize=" +
+                  DoubleToString(bodySize, Digits) + ", TotalWick=" +
+                  DoubleToString(totalWick, Digits) + ", Offset=" +
+                  IntegerToString(offset) + ". " + CandleMetricsText(index);
+         return(false);
+        }
+
+      if(orderType == OP_SELL)
+        {
+         if(close >= open)
+           {
+            reason = "SELL previous confirmation candle must be bearish. Offset=" +
+                     IntegerToString(offset) + ". " + CandleMetricsText(index);
+            return(false);
+           }
+
+         if(!PriceExceeds(upperWick, lowerWick))
+           {
+            reason = "SELL previous confirmation candle lower wick must be shorter than upper wick. UpperWick=" +
+                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
+                     DoubleToString(lowerWick, Digits) + ", Offset=" +
+                     IntegerToString(offset) + ". " + CandleMetricsText(index);
+            return(false);
+           }
+        }
+      else if(orderType == OP_BUY)
+        {
+         if(close <= open)
+           {
+            reason = "BUY previous confirmation candle must be bullish. Offset=" +
+                     IntegerToString(offset) + ". " + CandleMetricsText(index);
+            return(false);
+           }
+
+         if(!PriceExceeds(lowerWick, upperWick))
+           {
+            reason = "BUY previous confirmation candle upper wick must be shorter than lower wick. UpperWick=" +
+                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
+                     DoubleToString(lowerWick, Digits) + ", Offset=" +
+                     IntegerToString(offset) + ". " + CandleMetricsText(index);
+            return(false);
+           }
+        }
+      else
+        {
+         reason = "invalid order type for previous candle confirmation.";
+         return(false);
+        }
+     }
+
+   return(true);
+  }
+
+//+------------------------------------------------------------------+
 //| Candle metrics text for diagnostics                              |
 //+------------------------------------------------------------------+
 string CandleMetricsText(const int index)
@@ -643,6 +747,13 @@ void CheckForEntry()
          return;
         }
 
+      string buyPreSetupReason = "";
+      if(!CheckPreSetupConfirmation(1, OP_BUY, buyPreSetupReason))
+        {
+         DebugEntryLog("BUY rejected by previous candle confirmation. " + buyPreSetupReason);
+         return;
+        }
+
       if(angle < EMA_Angle_Threshold)
         {
          DebugEntryLog("BUY rejected by EMA angle. Angle=" +
@@ -672,6 +783,13 @@ void CheckForEntry()
       if(!CheckNoWickCandle(1, OP_SELL, sellCandleReason))
         {
          DebugEntryLog("SELL rejected by No-Wick filter. " + sellCandleReason);
+         return;
+        }
+
+      string sellPreSetupReason = "";
+      if(!CheckPreSetupConfirmation(1, OP_SELL, sellPreSetupReason))
+        {
+         DebugEntryLog("SELL rejected by previous candle confirmation. " + sellPreSetupReason);
          return;
         }
 
