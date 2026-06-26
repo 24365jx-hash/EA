@@ -18,7 +18,7 @@ input int    Max_Setup_Candles = 20;
 input double EMA_Angle_Threshold = 10.0;
 input int    EMA_Angle_Lookback_Bars = 3;
 input int    Min_Body_Points = 50;         // Gold: 50 points = 0.50 minimum setup candle body.
-input int    Pre_Setup_Confirm_Candles = 2; // 0=off, N=previous N candles must confirm setup direction.
+input int    Pre_Setup_Confirm_Candles = 2; // 0=off, N=previous N candles must match setup color and total wick < body.
 input double Max_Wick_Percentage = 20.0;
 input int    ZeroWick_Tolerance_Points = 2; // Treat tiny visual/noise wicks as zero. Gold: 2 points = 0.02 price.
 input int    StopLoss_Points = 200;       // Gold standard: 200 points = 2.00 price.
@@ -538,7 +538,7 @@ bool CheckNoWickCandle(const int index, const int orderType, string &reason)
   }
 
 //+------------------------------------------------------------------+
-//| Previous setup-direction candle confirmation                     |
+//| Previous setup candle confirmation                               |
 //+------------------------------------------------------------------+
 bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string &reason)
   {
@@ -546,6 +546,29 @@ bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string
 
    if(Pre_Setup_Confirm_Candles <= 0)
       return(true);
+
+   if(orderType != OP_BUY && orderType != OP_SELL)
+     {
+      reason = "invalid order type for previous candle confirmation.";
+      return(false);
+     }
+
+   if(Bars <= setupIndex)
+     {
+      reason = "not enough bars for setup candle confirmation.";
+      return(false);
+     }
+
+   double setupOpen = NormalizePrice(Open[setupIndex]);
+   double setupClose = NormalizePrice(Close[setupIndex]);
+   bool setupBullish = (setupClose > setupOpen);
+   bool setupBearish = (setupClose < setupOpen);
+
+   if(!setupBullish && !setupBearish)
+     {
+      reason = "setup candle is doji and has no color to match. " + CandleMetricsText(setupIndex);
+      return(false);
+     }
 
    for(int offset = 1; offset <= Pre_Setup_Confirm_Candles; offset++)
      {
@@ -568,6 +591,15 @@ bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string
          return(false);
         }
 
+      bool candleBullish = (close > open);
+      bool candleBearish = (close < open);
+      if((setupBullish && !candleBullish) || (setupBearish && !candleBearish))
+        {
+         reason = "previous confirmation candle must match setup candle color. Offset=" +
+                  IntegerToString(offset) + ". " + CandleMetricsText(index);
+         return(false);
+        }
+
       double bodySize = MathAbs(close - open);
       if(bodySize <= 0.0)
         {
@@ -581,52 +613,10 @@ bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string
 
       if(!PriceExceeds(bodySize, totalWick))
         {
-         reason = "previous confirmation candle body must be longer than total wicks. BodySize=" +
+         reason = "previous confirmation candle total wick must be shorter than body. BodySize=" +
                   DoubleToString(bodySize, Digits) + ", TotalWick=" +
                   DoubleToString(totalWick, Digits) + ", Offset=" +
                   IntegerToString(offset) + ". " + CandleMetricsText(index);
-         return(false);
-        }
-
-      if(orderType == OP_SELL)
-        {
-         if(close >= open)
-           {
-            reason = "SELL previous confirmation candle must be bearish. Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
-
-         if(!PriceExceeds(upperWick, lowerWick))
-           {
-            reason = "SELL previous confirmation candle lower wick must be shorter than upper wick. UpperWick=" +
-                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
-                     DoubleToString(lowerWick, Digits) + ", Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
-        }
-      else if(orderType == OP_BUY)
-        {
-         if(close <= open)
-           {
-            reason = "BUY previous confirmation candle must be bullish. Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
-
-         if(!PriceExceeds(lowerWick, upperWick))
-           {
-            reason = "BUY previous confirmation candle upper wick must be shorter than lower wick. UpperWick=" +
-                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
-                     DoubleToString(lowerWick, Digits) + ", Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
-        }
-      else
-        {
-         reason = "invalid order type for previous candle confirmation.";
          return(false);
         }
      }
