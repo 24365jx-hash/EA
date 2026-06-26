@@ -596,30 +596,12 @@ bool CheckPreSetupConfirmation(const int setupIndex, const int orderType, string
                      IntegerToString(offset) + ". " + CandleMetricsText(index);
             return(false);
            }
-
-         if(!PriceExceeds(upperWick, lowerWick))
-           {
-            reason = "SELL previous confirmation candle lower wick must be shorter than upper wick. UpperWick=" +
-                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
-                     DoubleToString(lowerWick, Digits) + ", Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
         }
       else if(orderType == OP_BUY)
         {
          if(close <= open)
            {
             reason = "BUY previous confirmation candle must be bullish. Offset=" +
-                     IntegerToString(offset) + ". " + CandleMetricsText(index);
-            return(false);
-           }
-
-         if(!PriceExceeds(lowerWick, upperWick))
-           {
-            reason = "BUY previous confirmation candle upper wick must be shorter than lower wick. UpperWick=" +
-                     DoubleToString(upperWick, Digits) + ", LowerWick=" +
-                     DoubleToString(lowerWick, Digits) + ", Offset=" +
                      IntegerToString(offset) + ". " + CandleMetricsText(index);
             return(false);
            }
