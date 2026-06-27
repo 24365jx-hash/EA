@@ -1,12 +1,11 @@
 //+------------------------------------------------------------------+
 //| IDC_8.mq4 - GOLD M1 SYSTEM (MT4)                                 |
-//| EMA cross + RSI pullback + fast EMA candle confirmation          |
+//| EMA cross + RSI cross + fast EMA candle confirmation             |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
-//--- trade direction cycle
 enum ENUM_CYCLE
   {
    CYCLE_NONE = 0,
@@ -14,7 +13,6 @@ enum ENUM_CYCLE
    CYCLE_SELL = 2
   };
 
-//--- setup phase within a cycle
 enum ENUM_SETUP_PHASE
   {
    PHASE_IDLE         = 0,
@@ -22,42 +20,38 @@ enum ENUM_SETUP_PHASE
    PHASE_WAIT_EMA     = 2
   };
 
-//+------------------------------------------------------------------+
-//| Inputs (all distance values in points)                           |
-//+------------------------------------------------------------------+
 //--- EMA
-input int InpFastEmaPeriod = 9;    // Fast EMA period
-input int InpSlowEmaPeriod = 50;   // Slow EMA period
+input int InpFastEmaPeriod = 9;
+input int InpSlowEmaPeriod = 50;
 
 //--- RSI
-input int    InpRsiPeriod = 14;    // RSI period
-input double InpRsiUpper  = 52.0;  // RSI upper level
-input double InpRsiLower  = 48.0;  // RSI lower level
+input int    InpRsiPeriod = 14;
+input double InpRsiUpper  = 52.0;
+input double InpRsiLower  = 48.0;
 
 //--- Entry rules
-input int InpObservationBars = 30; // Bars after cross to find setup
-input int InpEmaGraceBars    = 3;    // EMA confirm grace bars (incl. RSI bar)
+input int InpObservationBars = 30;
+input int InpEmaGraceBars    = 3;
 
 //--- Risk / exit
-input double InpLots             = 0.01; // Lot size
-input int    InpStopLossPoints   = 500;  // Stop loss (points)
-input int    InpTrailingStartPts = 200;  // Trailing start (points from entry)
-input int    InpTrailingStepPts  = 10;   // Trailing step (points)
+input double InpLots             = 0.01;
+input int    InpStopLossPoints   = 500;
+input int    InpTrailingStartPts = 200;
+input int    InpTrailingStepPts  = 10;
 
 //--- Trade settings
-input int    InpMagicNumber  = 80008;  // Magic number
-input int    InpSlippagePts  = 30;     // Slippage (points)
-input string InpTradeComment = "IDC_8"; // Order comment
+input int    InpMagicNumber  = 80008;
+input int    InpSlippagePts  = 30;
+input string InpTradeComment = "IDC_8";
 
-//+------------------------------------------------------------------+
 ENUM_CYCLE       g_cycle            = CYCLE_NONE;
 ENUM_SETUP_PHASE g_setup_phase      = PHASE_IDLE;
 datetime         g_cycle_start_time = 0;
 bool             g_entry_taken      = false;
 
-bool     g_rsi_armed        = false;
-int      g_grace_remaining  = 0;
-datetime g_last_bar_time    = 0;
+bool     g_rsi_armed       = false;
+int      g_grace_remaining = 0;
+datetime g_last_bar_time   = 0;
 
 //+------------------------------------------------------------------+
 double PointsToPrice(const int points)
@@ -123,23 +117,34 @@ void StartCycle(const ENUM_CYCLE cycle, const datetime bar_time)
   }
 
 //+------------------------------------------------------------------+
-bool GetEmaValues(const int shift, double &fast, double &slow)
+bool GetFastEma(const int shift, double &fast_ema)
   {
    if(Bars < InpSlowEmaPeriod + shift + 2)
       return false;
 
-   fast = iMA(Symbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
-   slow = iMA(Symbol(), Period(), InpSlowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   fast_ema = iMA(Symbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
    return true;
   }
 
 //+------------------------------------------------------------------+
-bool GetRsiValue(const int shift, double &rsi)
+bool GetEmaPair(const int shift, double &fast_ema, double &slow_ema)
   {
-   if(Bars < InpRsiPeriod + shift + 2)
+   if(Bars < InpSlowEmaPeriod + shift + 2)
       return false;
 
-   rsi = iRSI(Symbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
+   fast_ema = iMA(Symbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   slow_ema = iMA(Symbol(), Period(), InpSlowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
+  {
+   if(Bars < InpRsiPeriod + shift + 3)
+      return false;
+
+   rsi_curr = iRSI(Symbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
+   rsi_prev = iRSI(Symbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift + 1);
    return true;
   }
 
@@ -162,8 +167,7 @@ bool IsBodyDominant(const int shift)
 bool IsSellEmaConfirm(const int shift)
   {
    double fast_ema = 0.0;
-   double slow_ema = 0.0;
-   if(!GetEmaValues(shift, fast_ema, slow_ema))
+   if(!GetFastEma(shift, fast_ema))
       return false;
 
    double close = iClose(Symbol(), Period(), shift);
@@ -183,8 +187,7 @@ bool IsSellEmaConfirm(const int shift)
 bool IsBuyEmaConfirm(const int shift)
   {
    double fast_ema = 0.0;
-   double slow_ema = 0.0;
-   if(!GetEmaValues(shift, fast_ema, slow_ema))
+   if(!GetFastEma(shift, fast_ema))
       return false;
 
    double close = iClose(Symbol(), Period(), shift);
@@ -214,9 +217,33 @@ int BarsSinceCycleStart()
   }
 
 //+------------------------------------------------------------------+
+int RemainingObservationBars()
+  {
+   int elapsed = BarsSinceCycleStart();
+   if(elapsed == 2147483647)
+      return 0;
+
+   int remaining = InpObservationBars - elapsed + 1;
+   if(remaining < 0)
+      remaining = 0;
+
+   return remaining;
+  }
+
+//+------------------------------------------------------------------+
 bool IsObservationWindowExpired()
   {
-   return (BarsSinceCycleStart() > InpObservationBars);
+   return (RemainingObservationBars() <= 0);
+  }
+
+//+------------------------------------------------------------------+
+int CalcGraceBarsForTrigger()
+  {
+   int remaining = RemainingObservationBars();
+   if(remaining <= 0)
+      return 0;
+
+   return MathMin(InpEmaGraceBars, remaining);
   }
 
 //+------------------------------------------------------------------+
@@ -225,9 +252,9 @@ void DetectEmaCrossOnClosedBar()
    double fast_curr = 0.0, slow_curr = 0.0;
    double fast_prev = 0.0, slow_prev = 0.0;
 
-   if(!GetEmaValues(1, fast_curr, slow_curr))
+   if(!GetEmaPair(1, fast_curr, slow_curr))
       return;
-   if(!GetEmaValues(2, fast_prev, slow_prev))
+   if(!GetEmaPair(2, fast_prev, slow_prev))
       return;
 
    datetime cross_time = iTime(Symbol(), Period(), 1);
@@ -242,15 +269,27 @@ void DetectEmaCrossOnClosedBar()
   }
 
 //+------------------------------------------------------------------+
+bool IsRsiCrossAbove(const double rsi_prev, const double rsi_curr, const double level)
+  {
+   return (rsi_prev <= level && rsi_curr > level);
+  }
+
+//+------------------------------------------------------------------+
+bool IsRsiCrossBelow(const double rsi_prev, const double rsi_curr, const double level)
+  {
+   return (rsi_prev >= level && rsi_curr < level);
+  }
+
+//+------------------------------------------------------------------+
 void ProcessSellRsiOnClosedBar()
   {
-   double rsi = 0.0;
-   if(!GetRsiValue(1, rsi))
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(rsi > InpRsiUpper)
+      if(IsRsiCrossAbove(rsi_prev, rsi_curr, InpRsiUpper))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -259,10 +298,12 @@ void ProcessSellRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(rsi < InpRsiLower)
+      if(IsRsiCrossBelow(rsi_prev, rsi_curr, InpRsiLower))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
-         g_grace_remaining = InpEmaGraceBars;
+         g_grace_remaining = CalcGraceBarsForTrigger();
+         if(g_grace_remaining <= 0)
+            ResetSetupState();
         }
      }
   }
@@ -270,13 +311,13 @@ void ProcessSellRsiOnClosedBar()
 //+------------------------------------------------------------------+
 void ProcessBuyRsiOnClosedBar()
   {
-   double rsi = 0.0;
-   if(!GetRsiValue(1, rsi))
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(rsi < InpRsiLower)
+      if(IsRsiCrossBelow(rsi_prev, rsi_curr, InpRsiLower))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -285,34 +326,91 @@ void ProcessBuyRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(rsi > InpRsiUpper)
+      if(IsRsiCrossAbove(rsi_prev, rsi_curr, InpRsiUpper))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
-         g_grace_remaining = InpEmaGraceBars;
+         g_grace_remaining = CalcGraceBarsForTrigger();
+         if(g_grace_remaining <= 0)
+            ResetSetupState();
         }
      }
   }
 
 //+------------------------------------------------------------------+
-bool OpenPosition(const int order_type)
+double NormalizePrice(const double price)
+  {
+   return NormalizeDouble(price, Digits);
+  }
+
+//+------------------------------------------------------------------+
+double GetSetupClosePrice()
+  {
+   return NormalizePrice(iClose(Symbol(), Period(), 1));
+  }
+
+//+------------------------------------------------------------------+
+bool IsEntrySlippageAcceptable(const int order_type, const double setup_close)
   {
    RefreshRates();
 
-   double price = (order_type == OP_BUY) ? Ask : Bid;
-   double sl    = 0.0;
+   double market = (order_type == OP_BUY) ? Ask : Bid;
+   double diff_pts = MathAbs(market - setup_close) / Point;
 
+   return (diff_pts <= InpSlippagePts);
+  }
+
+//+------------------------------------------------------------------+
+bool IsStopDistanceValid(const int order_type, const double entry_price, const double sl)
+  {
+   double stop_level_pts = MarketInfo(Symbol(), MODE_STOPLEVEL);
+   if(stop_level_pts <= 0.0)
+      return true;
+
+   double distance_pts = 0.0;
+   if(order_type == OP_BUY)
+      distance_pts = (entry_price - sl) / Point;
+   else
+      distance_pts = (sl - entry_price) / Point;
+
+   return (distance_pts >= stop_level_pts);
+  }
+
+//+------------------------------------------------------------------+
+bool OpenPositionAtSetupClose(const int order_type)
+  {
+   g_entry_taken = true;
+
+   RefreshRates();
+
+   double setup_close = GetSetupClosePrice();
+   double send_price  = (order_type == OP_BUY) ? Ask : Bid;
+
+   if(!IsEntrySlippageAcceptable(order_type, setup_close))
+     {
+      Print("IDC_8: entry skipped. setup close=", setup_close,
+            " market=", send_price, " max slippage pts=", InpSlippagePts);
+      return false;
+     }
+
+   double sl = 0.0;
    if(InpStopLossPoints > 0)
      {
       if(order_type == OP_BUY)
-         sl = price - PointsToPrice(InpStopLossPoints);
+         sl = setup_close - PointsToPrice(InpStopLossPoints);
       else
-         sl = price + PointsToPrice(InpStopLossPoints);
+         sl = setup_close + PointsToPrice(InpStopLossPoints);
 
-      sl = NormalizeDouble(sl, Digits);
+      sl = NormalizePrice(sl);
+
+      if(!IsStopDistanceValid(order_type, setup_close, sl))
+        {
+         Print("IDC_8: SL distance below broker stop level. sl=", sl);
+         return false;
+        }
      }
 
    color arrow = (order_type == OP_BUY) ? clrGreen : clrRed;
-   int ticket = OrderSend(Symbol(), order_type, InpLots, price, InpSlippagePts,
+   int ticket = OrderSend(Symbol(), order_type, InpLots, send_price, InpSlippagePts,
                           sl, 0, InpTradeComment, InpMagicNumber, 0, arrow);
 
    if(ticket < 0)
@@ -321,7 +419,6 @@ bool OpenPosition(const int order_type)
       return false;
      }
 
-   g_entry_taken = true;
    ResetSetupState();
    return true;
   }
@@ -338,10 +435,15 @@ void TrySellEntryOnClosedBar()
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
       return;
+   if(g_grace_remaining <= 0)
+     {
+      ResetSetupState();
+      return;
+     }
 
    if(IsSellEmaConfirm(1))
      {
-      OpenPosition(OP_SELL);
+      OpenPositionAtSetupClose(OP_SELL);
       return;
      }
 
@@ -362,10 +464,15 @@ void TryBuyEntryOnClosedBar()
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
       return;
+   if(g_grace_remaining <= 0)
+     {
+      ResetSetupState();
+      return;
+     }
 
    if(IsBuyEmaConfirm(1))
      {
-      OpenPosition(OP_BUY);
+      OpenPositionAtSetupClose(OP_BUY);
       return;
      }
 
@@ -375,17 +482,9 @@ void TryBuyEntryOnClosedBar()
   }
 
 //+------------------------------------------------------------------+
-void ProcessEntryLogicOnNewBar()
+void ProcessSetupLogicOnNewBar()
   {
-   if(HasOpenPosition())
-      return;
-
-   DetectEmaCrossOnClosedBar();
-
-   if(g_cycle == CYCLE_NONE)
-      return;
-
-   if(g_entry_taken)
+   if(g_cycle == CYCLE_NONE || g_entry_taken)
       return;
 
    if(IsObservationWindowExpired())
@@ -404,6 +503,17 @@ void ProcessEntryLogicOnNewBar()
       ProcessBuyRsiOnClosedBar();
       TryBuyEntryOnClosedBar();
      }
+  }
+
+//+------------------------------------------------------------------+
+void ProcessEntryLogicOnNewBar()
+  {
+   DetectEmaCrossOnClosedBar();
+
+   if(HasOpenPosition())
+      return;
+
+   ProcessSetupLogicOnNewBar();
   }
 
 //+------------------------------------------------------------------+
@@ -445,8 +555,12 @@ bool ModifyOrderSL(const int ticket, const double new_sl)
    if(!OrderSelect(ticket, SELECT_BY_TICKET))
       return false;
 
-   double sl = NormalizeDouble(new_sl, Digits);
+   double sl = NormalizePrice(new_sl);
    double tp = OrderTakeProfit();
+   int    order_type = OrderType();
+
+   if(!IsStopDistanceValid(order_type, (order_type == OP_BUY) ? Bid : Ask, sl))
+      return false;
 
    return OrderModify(ticket, OrderOpenPrice(), sl, tp, 0, clrNONE);
   }
@@ -535,6 +649,26 @@ bool ValidateInputs()
       Print("IDC_8: lot size must be > 0");
       return false;
      }
+   if(InpStopLossPoints < 0)
+     {
+      Print("IDC_8: stop loss points must be >= 0");
+      return false;
+     }
+   if(InpTrailingStartPts < 0)
+     {
+      Print("IDC_8: trailing start points must be >= 0");
+      return false;
+     }
+   if(InpTrailingStepPts < 0)
+     {
+      Print("IDC_8: trailing step points must be >= 0");
+      return false;
+     }
+   if(InpSlippagePts < 0)
+     {
+      Print("IDC_8: slippage points must be >= 0");
+      return false;
+     }
    return true;
   }
 
@@ -548,11 +682,6 @@ int OnInit()
    ResetCycleState();
 
    return INIT_SUCCEEDED;
-  }
-
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-  {
   }
 
 //+------------------------------------------------------------------+
