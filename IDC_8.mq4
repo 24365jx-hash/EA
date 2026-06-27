@@ -3,7 +3,7 @@
 //| EMA cross + RSI cross + fast EMA candle confirmation             |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
 enum ENUM_CYCLE
@@ -19,6 +19,10 @@ enum ENUM_SETUP_PHASE
    PHASE_WAIT_RSI_ARM = 1,
    PHASE_WAIT_EMA     = 2
   };
+
+//--- Symbol / broker
+input bool   InpAutoDetectGold = true;   // Auto-detect gold symbol
+input string InpManualSymbol   = "";     // Manual symbol override (blank=auto)
 
 //--- EMA
 input int InpFastEmaPeriod = 9;
@@ -44,6 +48,10 @@ input int    InpMagicNumber  = 80008;
 input int    InpSlippagePts  = 30;
 input string InpTradeComment = "IDC_8";
 
+string   g_trade_symbol      = "";
+int      g_broker_gmt_offset = 0;
+datetime g_broker_time       = 0;
+
 ENUM_CYCLE       g_cycle            = CYCLE_NONE;
 ENUM_SETUP_PHASE g_setup_phase      = PHASE_IDLE;
 datetime         g_cycle_start_time = 0;
@@ -54,15 +62,222 @@ int      g_grace_remaining = 0;
 datetime g_last_bar_time   = 0;
 
 //+------------------------------------------------------------------+
+string TradeSymbol()
+  {
+   if(StringLen(g_trade_symbol) > 0)
+      return g_trade_symbol;
+   return Symbol();
+  }
+
+//+------------------------------------------------------------------+
+double TradePoint()
+  {
+   return MarketInfo(TradeSymbol(), MODE_POINT);
+  }
+
+//+------------------------------------------------------------------+
+int TradeDigits()
+  {
+   return (int)MarketInfo(TradeSymbol(), MODE_DIGITS);
+  }
+
+//+------------------------------------------------------------------+
+double TradeAsk()
+  {
+   return MarketInfo(TradeSymbol(), MODE_ASK);
+  }
+
+//+------------------------------------------------------------------+
+double TradeBid()
+  {
+   return MarketInfo(TradeSymbol(), MODE_BID);
+  }
+
+//+------------------------------------------------------------------+
 double PointsToPrice(const int points)
   {
-   return (double)points * Point;
+   return (double)points * TradePoint();
+  }
+
+//+------------------------------------------------------------------+
+double NormalizeTradePrice(const double price)
+  {
+   return NormalizeDouble(price, TradeDigits());
+  }
+
+//+------------------------------------------------------------------+
+double GetStopLevelPts()
+  {
+   return MarketInfo(TradeSymbol(), MODE_STOPLEVEL);
+  }
+
+//+------------------------------------------------------------------+
+double GetFreezeLevelPts()
+  {
+   return MarketInfo(TradeSymbol(), MODE_FREEZELEVEL);
+  }
+
+//+------------------------------------------------------------------+
+void UpdateBrokerTime()
+  {
+   g_broker_time       = TimeCurrent();
+   g_broker_gmt_offset = TimeGMTOffset();
+  }
+
+//+------------------------------------------------------------------+
+string FormatBrokerTime(const datetime t)
+  {
+   return TimeToString(t, TIME_DATE | TIME_MINUTES | TIME_SECONDS);
+  }
+
+//+------------------------------------------------------------------+
+string BrokerOffsetLabel()
+  {
+   int hours = g_broker_gmt_offset / 3600;
+   int mins  = (MathAbs(g_broker_gmt_offset) % 3600) / 60;
+   string sign = (g_broker_gmt_offset >= 0) ? "+" : "-";
+   return StringFormat("GMT%s%02d:%02d", sign, MathAbs(hours), mins);
+  }
+
+//+------------------------------------------------------------------+
+bool IsGoldSymbolName(const string sym)
+  {
+   string upper = sym;
+   StringToUpper(upper);
+
+   if(StringFind(upper, "XAU") >= 0)
+      return true;
+   if(StringFind(upper, "GOLD") >= 0)
+      return true;
+
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool IsSymbolTradableGold(const string sym)
+  {
+   if(StringLen(sym) == 0)
+      return false;
+   if(!IsGoldSymbolName(sym))
+      return false;
+
+   if(!SymbolSelect(sym, true))
+      return false;
+   if(MarketInfo(sym, MODE_TRADEALLOWED) == 0)
+      return false;
+   if(MarketInfo(sym, MODE_BID) <= 0.0)
+      return false;
+   if(MarketInfo(sym, MODE_ASK) <= 0.0)
+      return false;
+
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+int GoldSymbolPriority(const string sym)
+  {
+   string upper = sym;
+   StringToUpper(upper);
+
+   if(upper == "XAUUSD")
+      return 100;
+   if(StringFind(upper, "XAUUSD") == 0)
+      return 90;
+   if(upper == "GOLD")
+      return 80;
+   if(StringFind(upper, "GOLD") == 0)
+      return 70;
+   if(StringFind(upper, "XAU") >= 0)
+      return 60;
+   return 10;
+  }
+
+//+------------------------------------------------------------------+
+bool TrySetTradeSymbol(const string sym, string &best_sym, int &best_rank)
+  {
+   if(!IsSymbolTradableGold(sym))
+      return false;
+
+   int rank = GoldSymbolPriority(sym);
+   if(best_sym == "" || rank > best_rank)
+     {
+      best_sym  = sym;
+      best_rank = rank;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+bool DetectGoldSymbol()
+  {
+   string best_sym  = "";
+   int    best_rank = -1;
+
+   if(StringLen(InpManualSymbol) > 0)
+     {
+      if(!TrySetTradeSymbol(InpManualSymbol, best_sym, best_rank))
+        {
+         Print("IDC_8: manual symbol not tradable gold: ", InpManualSymbol);
+         return false;
+        }
+      g_trade_symbol = best_sym;
+      return true;
+     }
+
+   if(!InpAutoDetectGold)
+     {
+      if(!TrySetTradeSymbol(Symbol(), best_sym, best_rank))
+        {
+         Print("IDC_8: chart symbol is not tradable gold: ", Symbol());
+         return false;
+        }
+      g_trade_symbol = best_sym;
+      return true;
+     }
+
+   string preferred[] =
+     {
+      "XAUUSD", "XAUUSDm", "XAUUSD.", "XAUUSD#", "XAUUSD.i", "XAUUSDpro",
+      "XAUUSD.r", "XAUUSD_", "XAU/USD", "GOLD", "GOLDm", "GOLD.", "GOLD#",
+      "GOLD.i", "GOLDpro", "XAUUSD.ecn", "XAUUSD-STD", "XAUUSD.std"
+     };
+
+   int pref_count = ArraySize(preferred);
+   for(int i = 0; i < pref_count; i++)
+      TrySetTradeSymbol(preferred[i], best_sym, best_rank);
+
+   if(IsSymbolTradableGold(Symbol()))
+      TrySetTradeSymbol(Symbol(), best_sym, best_rank);
+
+   int total = SymbolsTotal(false);
+   for(int j = 0; j < total; j++)
+     {
+      string sym = SymbolName(j, false);
+      TrySetTradeSymbol(sym, best_sym, best_rank);
+     }
+
+   total = SymbolsTotal(true);
+   for(int k = 0; k < total; k++)
+     {
+      string sym = SymbolName(k, true);
+      TrySetTradeSymbol(sym, best_sym, best_rank);
+     }
+
+   if(best_sym == "")
+     {
+      Print("IDC_8: no tradable gold symbol detected.");
+      return false;
+     }
+
+   g_trade_symbol = best_sym;
+   SymbolSelect(g_trade_symbol, true);
+   return true;
   }
 
 //+------------------------------------------------------------------+
 bool IsNewBar()
   {
-   datetime bar_time = iTime(Symbol(), Period(), 0);
+   datetime bar_time = iTime(TradeSymbol(), Period(), 0);
    if(bar_time == 0)
       return false;
    if(bar_time != g_last_bar_time)
@@ -74,15 +289,23 @@ bool IsNewBar()
   }
 
 //+------------------------------------------------------------------+
+bool IsOurOrderTicket()
+  {
+   if(OrderSymbol() != TradeSymbol())
+      return false;
+   if(OrderMagicNumber() != InpMagicNumber)
+      return false;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 bool HasOpenPosition()
   {
    for(int i = OrdersTotal() - 1; i >= 0; i--)
      {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
          continue;
-      if(OrderSymbol() != Symbol())
-         continue;
-      if(OrderMagicNumber() != InpMagicNumber)
+      if(!IsOurOrderTicket())
          continue;
       if(OrderType() == OP_BUY || OrderType() == OP_SELL)
          return true;
@@ -119,42 +342,42 @@ void StartCycle(const ENUM_CYCLE cycle, const datetime bar_time)
 //+------------------------------------------------------------------+
 bool GetFastEma(const int shift, double &fast_ema)
   {
-   if(Bars < InpSlowEmaPeriod + shift + 2)
+   if(iBars(TradeSymbol(), Period()) < InpSlowEmaPeriod + shift + 2)
       return false;
 
-   fast_ema = iMA(Symbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   fast_ema = iMA(TradeSymbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
    return true;
   }
 
 //+------------------------------------------------------------------+
 bool GetEmaPair(const int shift, double &fast_ema, double &slow_ema)
   {
-   if(Bars < InpSlowEmaPeriod + shift + 2)
+   if(iBars(TradeSymbol(), Period()) < InpSlowEmaPeriod + shift + 2)
       return false;
 
-   fast_ema = iMA(Symbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
-   slow_ema = iMA(Symbol(), Period(), InpSlowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   fast_ema = iMA(TradeSymbol(), Period(), InpFastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
+   slow_ema = iMA(TradeSymbol(), Period(), InpSlowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE, shift);
    return true;
   }
 
 //+------------------------------------------------------------------+
 bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
   {
-   if(Bars < InpRsiPeriod + shift + 3)
+   if(iBars(TradeSymbol(), Period()) < InpRsiPeriod + shift + 3)
       return false;
 
-   rsi_curr = iRSI(Symbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
-   rsi_prev = iRSI(Symbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift + 1);
+   rsi_curr = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
+   rsi_prev = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift + 1);
    return true;
   }
 
 //+------------------------------------------------------------------+
 bool IsBodyDominant(const int shift)
   {
-   double open  = iOpen(Symbol(), Period(), shift);
-   double close = iClose(Symbol(), Period(), shift);
-   double high  = iHigh(Symbol(), Period(), shift);
-   double low   = iLow(Symbol(), Period(), shift);
+   double open  = iOpen(TradeSymbol(), Period(), shift);
+   double close = iClose(TradeSymbol(), Period(), shift);
+   double high  = iHigh(TradeSymbol(), Period(), shift);
+   double low   = iLow(TradeSymbol(), Period(), shift);
 
    double body       = MathAbs(close - open);
    double upper_wick = high - MathMax(open, close);
@@ -170,8 +393,8 @@ bool IsSellEmaConfirm(const int shift)
    if(!GetFastEma(shift, fast_ema))
       return false;
 
-   double close = iClose(Symbol(), Period(), shift);
-   double low   = iLow(Symbol(), Period(), shift);
+   double close = iClose(TradeSymbol(), Period(), shift);
+   double low   = iLow(TradeSymbol(), Period(), shift);
 
    if(close >= fast_ema)
       return false;
@@ -190,8 +413,8 @@ bool IsBuyEmaConfirm(const int shift)
    if(!GetFastEma(shift, fast_ema))
       return false;
 
-   double close = iClose(Symbol(), Period(), shift);
-   double high  = iHigh(Symbol(), Period(), shift);
+   double close = iClose(TradeSymbol(), Period(), shift);
+   double high  = iHigh(TradeSymbol(), Period(), shift);
 
    if(close <= fast_ema)
       return false;
@@ -209,7 +432,7 @@ int BarsSinceCycleStart()
    if(g_cycle_start_time == 0)
       return 2147483647;
 
-   int start_shift = iBarShift(Symbol(), Period(), g_cycle_start_time, true);
+   int start_shift = iBarShift(TradeSymbol(), Period(), g_cycle_start_time, true);
    if(start_shift < 0)
       return 2147483647;
 
@@ -257,7 +480,7 @@ void DetectEmaCrossOnClosedBar()
    if(!GetEmaPair(2, fast_prev, slow_prev))
       return;
 
-   datetime cross_time = iTime(Symbol(), Period(), 1);
+   datetime cross_time = iTime(TradeSymbol(), Period(), 1);
 
    bool dead_cross   = (fast_prev >= slow_prev) && (fast_curr < slow_curr);
    bool golden_cross = (fast_prev <= slow_prev) && (fast_curr > slow_curr);
@@ -337,15 +560,21 @@ void ProcessBuyRsiOnClosedBar()
   }
 
 //+------------------------------------------------------------------+
-double NormalizePrice(const double price)
+double GetSetupClosePrice()
   {
-   return NormalizeDouble(price, Digits);
+   return NormalizeTradePrice(iClose(TradeSymbol(), Period(), 1));
   }
 
 //+------------------------------------------------------------------+
-double GetSetupClosePrice()
+double BuildInitialSL(const int order_type, const double reference_price)
   {
-   return NormalizePrice(iClose(Symbol(), Period(), 1));
+   if(InpStopLossPoints <= 0)
+      return 0.0;
+
+   if(order_type == OP_BUY)
+      return NormalizeTradePrice(reference_price - PointsToPrice(InpStopLossPoints));
+
+   return NormalizeTradePrice(reference_price + PointsToPrice(InpStopLossPoints));
   }
 
 //+------------------------------------------------------------------+
@@ -353,26 +582,192 @@ bool IsEntrySlippageAcceptable(const int order_type, const double setup_close)
   {
    RefreshRates();
 
-   double market = (order_type == OP_BUY) ? Ask : Bid;
-   double diff_pts = MathAbs(market - setup_close) / Point;
+   double market = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
+   double diff_pts = MathAbs(market - setup_close) / TradePoint();
 
    return (diff_pts <= InpSlippagePts);
   }
 
 //+------------------------------------------------------------------+
-bool IsStopDistanceValid(const int order_type, const double entry_price, const double sl)
+double ClampStopLossForBroker(const int order_type, const double desired_sl)
   {
-   double stop_level_pts = MarketInfo(Symbol(), MODE_STOPLEVEL);
+   if(desired_sl <= 0.0)
+      return 0.0;
+
+   double stop_pts   = GetStopLevelPts();
+   double freeze_pts = GetFreezeLevelPts();
+   double guard_pts  = stop_pts;
+   if(freeze_pts > guard_pts)
+      guard_pts = freeze_pts;
+   if(guard_pts < 1.0)
+      guard_pts = 1.0;
+
+   double guard = PointsToPrice((int)guard_pts);
+   double bid   = TradeBid();
+   double ask   = TradeAsk();
+   double sl    = NormalizeTradePrice(desired_sl);
+
+   if(order_type == OP_BUY)
+     {
+      double max_sl = bid - guard;
+      if(sl > max_sl)
+         sl = NormalizeTradePrice(max_sl);
+     }
+   else if(order_type == OP_SELL)
+     {
+      double min_sl = ask + guard;
+      if(sl < min_sl)
+         sl = NormalizeTradePrice(min_sl);
+     }
+
+   return sl;
+  }
+
+//+------------------------------------------------------------------+
+bool IsStopDistanceValid(const int order_type, const double reference_price, const double sl)
+  {
+   if(sl <= 0.0)
+      return false;
+
+   double stop_level_pts = GetStopLevelPts();
    if(stop_level_pts <= 0.0)
       return true;
 
    double distance_pts = 0.0;
    if(order_type == OP_BUY)
-      distance_pts = (entry_price - sl) / Point;
+      distance_pts = (reference_price - sl) / TradePoint();
    else
-      distance_pts = (sl - entry_price) / Point;
+      distance_pts = (sl - reference_price) / TradePoint();
 
    return (distance_pts >= stop_level_pts);
+  }
+
+//+------------------------------------------------------------------+
+bool IsTrailingImprovement(const int order_type, const double current_sl, const double new_sl)
+  {
+   if(new_sl <= 0.0)
+      return false;
+
+   double min_delta = PointsToPrice(1);
+
+   if(order_type == OP_BUY)
+     {
+      if(current_sl <= 0.0)
+         return true;
+      return (new_sl > current_sl + min_delta);
+     }
+
+   if(current_sl <= 0.0)
+      return true;
+
+   return (new_sl < current_sl - min_delta);
+  }
+
+//+------------------------------------------------------------------+
+bool SafeModifyStopLoss(const int ticket, const double desired_sl, const bool allow_restore)
+  {
+   if(desired_sl <= 0.0)
+      return false;
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return false;
+
+   int    order_type = OrderType();
+   double open_price = OrderOpenPrice();
+   double current_sl = OrderStopLoss();
+   double tp         = OrderTakeProfit();
+
+   double target_sl = ClampStopLossForBroker(order_type, desired_sl);
+   if(target_sl <= 0.0)
+      return false;
+
+   if(!allow_restore)
+     {
+      if(!IsTrailingImprovement(order_type, current_sl, target_sl))
+         return true;
+     }
+   else
+     {
+      if(current_sl > 0.0)
+         return true;
+     }
+
+   if(!IsStopDistanceValid(order_type, (order_type == OP_BUY) ? TradeBid() : TradeAsk(), target_sl))
+     {
+      target_sl = BuildInitialSL(order_type, open_price);
+      target_sl = ClampStopLossForBroker(order_type, target_sl);
+     }
+
+   if(target_sl <= 0.0)
+      return false;
+
+   for(int attempt = 0; attempt < 5; attempt++)
+     {
+      RefreshRates();
+      target_sl = ClampStopLossForBroker(order_type, target_sl);
+      if(target_sl <= 0.0)
+         return false;
+
+      if(OrderSelect(ticket, SELECT_BY_TICKET))
+        {
+         if(!allow_restore && !IsTrailingImprovement(order_type, OrderStopLoss(), target_sl))
+            return true;
+        }
+
+      if(OrderModify(ticket, open_price, target_sl, tp, 0, clrNONE))
+         return true;
+
+      int err = GetLastError();
+      Print("IDC_8: OrderModify retry ", attempt + 1,
+            " ticket=", ticket, " sl=", target_sl, " err=", err);
+      Sleep(200);
+     }
+
+   if(OrderSelect(ticket, SELECT_BY_TICKET))
+     {
+      if(OrderStopLoss() <= 0.0)
+         Print("IDC_8: CRITICAL - SL missing after failed modify. ticket=", ticket);
+     }
+
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool AttachMissingStopLoss(const int ticket)
+  {
+   if(InpStopLossPoints <= 0)
+      return true;
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return false;
+
+   if(OrderStopLoss() > 0.0)
+      return true;
+
+   double emergency_sl = BuildInitialSL(OrderType(), OrderOpenPrice());
+   return SafeModifyStopLoss(ticket, emergency_sl, true);
+  }
+
+//+------------------------------------------------------------------+
+void ProtectAllPositionsStopLoss()
+  {
+   if(InpStopLossPoints <= 0)
+      return;
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+      if(!IsOurOrderTicket())
+         continue;
+
+      int order_type = OrderType();
+      if(order_type != OP_BUY && order_type != OP_SELL)
+         continue;
+
+      if(OrderStopLoss() <= 0.0)
+         AttachMissingStopLoss(OrderTicket());
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -383,7 +778,7 @@ bool OpenPositionAtSetupClose(const int order_type)
    RefreshRates();
 
    double setup_close = GetSetupClosePrice();
-   double send_price  = (order_type == OP_BUY) ? Ask : Bid;
+   double send_price  = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
 
    if(!IsEntrySlippageAcceptable(order_type, setup_close))
      {
@@ -392,31 +787,55 @@ bool OpenPositionAtSetupClose(const int order_type)
       return false;
      }
 
-   double sl = 0.0;
-   if(InpStopLossPoints > 0)
+   if(InpStopLossPoints <= 0)
      {
-      if(order_type == OP_BUY)
-         sl = setup_close - PointsToPrice(InpStopLossPoints);
-      else
-         sl = setup_close + PointsToPrice(InpStopLossPoints);
+      Print("IDC_8: entry blocked. StopLossPoints must be > 0 for mandatory SL.");
+      return false;
+     }
 
-      sl = NormalizePrice(sl);
+   double sl = BuildInitialSL(order_type, setup_close);
+   sl = ClampStopLossForBroker(order_type, sl);
 
-      if(!IsStopDistanceValid(order_type, setup_close, sl))
-        {
-         Print("IDC_8: SL distance below broker stop level. sl=", sl);
-         return false;
-        }
+   if(sl <= 0.0 || !IsStopDistanceValid(order_type, setup_close, sl))
+     {
+      Print("IDC_8: initial SL invalid after broker clamp. sl=", sl);
+      return false;
      }
 
    color arrow = (order_type == OP_BUY) ? clrGreen : clrRed;
-   int ticket = OrderSend(Symbol(), order_type, InpLots, send_price, InpSlippagePts,
-                          sl, 0, InpTradeComment, InpMagicNumber, 0, arrow);
+   int ticket  = -1;
+
+   for(int attempt = 0; attempt < 5; attempt++)
+     {
+      RefreshRates();
+      send_price = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
+      sl = ClampStopLossForBroker(order_type, BuildInitialSL(order_type, setup_close));
+
+      ticket = OrderSend(TradeSymbol(), order_type, InpLots, send_price, InpSlippagePts,
+                         sl, 0, InpTradeComment, InpMagicNumber, 0, arrow);
+      if(ticket >= 0)
+         break;
+
+      Print("IDC_8: OrderSend retry ", attempt + 1, " err=", GetLastError());
+      Sleep(200);
+     }
 
    if(ticket < 0)
      {
-      Print("IDC_8: OrderSend failed. error=", GetLastError());
+      Print("IDC_8: OrderSend failed after retries. error=", GetLastError());
       return false;
+     }
+
+   if(OrderSelect(ticket, SELECT_BY_TICKET))
+     {
+      if(OrderStopLoss() <= 0.0)
+        {
+         if(!AttachMissingStopLoss(ticket))
+           {
+            Print("IDC_8: CRITICAL - opened without SL, restore failed. ticket=", ticket);
+            return false;
+           }
+        }
      }
 
    ResetSetupState();
@@ -527,9 +946,9 @@ double CalcTrailingStopPrice(const int order_type,
    double profit_points = 0.0;
 
    if(order_type == OP_BUY)
-      profit_points = (market_price - open_price) / Point;
+      profit_points = (market_price - open_price) / TradePoint();
    else
-      profit_points = (open_price - market_price) / Point;
+      profit_points = (open_price - market_price) / TradePoint();
 
    if(profit_points < InpTrailingStartPts)
       return 0.0;
@@ -550,22 +969,6 @@ double CalcTrailingStopPrice(const int order_type,
   }
 
 //+------------------------------------------------------------------+
-bool ModifyOrderSL(const int ticket, const double new_sl)
-  {
-   if(!OrderSelect(ticket, SELECT_BY_TICKET))
-      return false;
-
-   double sl = NormalizePrice(new_sl);
-   double tp = OrderTakeProfit();
-   int    order_type = OrderType();
-
-   if(!IsStopDistanceValid(order_type, (order_type == OP_BUY) ? Bid : Ask, sl))
-      return false;
-
-   return OrderModify(ticket, OrderOpenPrice(), sl, tp, 0, clrNONE);
-  }
-
-//+------------------------------------------------------------------+
 void ManageTrailingStop()
   {
    if(InpTrailingStartPts <= 0)
@@ -577,37 +980,37 @@ void ManageTrailingStop()
      {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
          continue;
-      if(OrderSymbol() != Symbol())
-         continue;
-      if(OrderMagicNumber() != InpMagicNumber)
+      if(!IsOurOrderTicket())
          continue;
 
       int order_type = OrderType();
       if(order_type != OP_BUY && order_type != OP_SELL)
          continue;
 
+      int ticket = OrderTicket();
+
+      if(OrderStopLoss() <= 0.0)
+        {
+         AttachMissingStopLoss(ticket);
+         continue;
+      }
+
       double open_price   = OrderOpenPrice();
       double current_sl   = OrderStopLoss();
-      double market_price = (order_type == OP_BUY) ? Bid : Ask;
+      double market_price = (order_type == OP_BUY) ? TradeBid() : TradeAsk();
 
       double target_sl = CalcTrailingStopPrice(order_type, open_price, market_price);
       if(target_sl <= 0.0)
          continue;
 
-      double min_delta   = PointsToPrice(1);
-      bool should_modify = false;
+      target_sl = ClampStopLossForBroker(order_type, target_sl);
+      if(target_sl <= 0.0)
+         continue;
 
-      if(order_type == OP_BUY)
-         should_modify = (current_sl == 0.0) || (target_sl > current_sl + min_delta);
-      else
-         should_modify = (current_sl == 0.0) || (target_sl < current_sl - min_delta);
+      if(!IsTrailingImprovement(order_type, current_sl, target_sl))
+         continue;
 
-      if(should_modify)
-        {
-         if(!ModifyOrderSL(OrderTicket(), target_sl))
-            Print("IDC_8: OrderModify failed. ticket=", OrderTicket(),
-                  " error=", GetLastError());
-        }
+      SafeModifyStopLoss(ticket, target_sl, false);
      }
   }
 
@@ -649,9 +1052,9 @@ bool ValidateInputs()
       Print("IDC_8: lot size must be > 0");
       return false;
      }
-   if(InpStopLossPoints < 0)
+   if(InpStopLossPoints <= 0)
      {
-      Print("IDC_8: stop loss points must be >= 0");
+      Print("IDC_8: stop loss points must be > 0 (mandatory SL)");
       return false;
      }
    if(InpTrailingStartPts < 0)
@@ -678,7 +1081,21 @@ int OnInit()
    if(!ValidateInputs())
       return INIT_PARAMETERS_INCORRECT;
 
-   g_last_bar_time = iTime(Symbol(), Period(), 0);
+   UpdateBrokerTime();
+
+   if(!DetectGoldSymbol())
+      return INIT_FAILED;
+
+   UpdateBrokerTime();
+
+   Print("IDC_8 init | trade symbol=", g_trade_symbol,
+         " | chart symbol=", Symbol(),
+         " | broker time=", FormatBrokerTime(g_broker_time),
+         " | offset=", BrokerOffsetLabel(),
+         " | stop level pts=", DoubleToString(GetStopLevelPts(), 0),
+         " | freeze level pts=", DoubleToString(GetFreezeLevelPts(), 0));
+
+   g_last_bar_time = iTime(TradeSymbol(), Period(), 0);
    ResetCycleState();
 
    return INIT_SUCCEEDED;
@@ -687,6 +1104,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   UpdateBrokerTime();
+   ProtectAllPositionsStopLoss();
    ManageTrailingStop();
 
    if(!IsNewBar())
