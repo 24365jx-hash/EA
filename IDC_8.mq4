@@ -3,7 +3,7 @@
 //| EMA cross + RSI cross + fast EMA candle confirmation             |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.00"
+#property version   "3.01"
 #property strict
 
 enum ENUM_CYCLE
@@ -361,14 +361,27 @@ bool GetEmaPair(const int shift, double &fast_ema, double &slow_ema)
   }
 
 //+------------------------------------------------------------------+
-bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
+bool GetRsiValue(const int shift, double &rsi)
   {
-   if(iBars(TradeSymbol(), Period()) < InpRsiPeriod + shift + 3)
+   if(iBars(TradeSymbol(), Period()) < InpRsiPeriod + shift + 2)
       return false;
 
-   rsi_curr = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
-   rsi_prev = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift + 1);
+   rsi = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
    return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Closed-bar RSI level breach (touch = break, original strategy)   |
+//+------------------------------------------------------------------+
+bool IsRsiBreakAboveLevel(const double rsi, const double level)
+  {
+   return (rsi >= level);
+  }
+
+//+------------------------------------------------------------------+
+bool IsRsiBreakBelowLevel(const double rsi, const double level)
+  {
+   return (rsi <= level);
   }
 
 //+------------------------------------------------------------------+
@@ -492,27 +505,15 @@ void DetectEmaCrossOnClosedBar()
   }
 
 //+------------------------------------------------------------------+
-bool IsRsiCrossAbove(const double rsi_prev, const double rsi_curr, const double level)
-  {
-   return (rsi_prev <= level && rsi_curr > level);
-  }
-
-//+------------------------------------------------------------------+
-bool IsRsiCrossBelow(const double rsi_prev, const double rsi_curr, const double level)
-  {
-   return (rsi_prev >= level && rsi_curr < level);
-  }
-
-//+------------------------------------------------------------------+
 void ProcessSellRsiOnClosedBar()
   {
-   double rsi_curr = 0.0, rsi_prev = 0.0;
-   if(!GetRsiPair(1, rsi_curr, rsi_prev))
+   double rsi = 0.0;
+   if(!GetRsiValue(1, rsi))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(IsRsiCrossAbove(rsi_prev, rsi_curr, InpRsiUpper))
+      if(IsRsiBreakAboveLevel(rsi, InpRsiUpper))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -521,7 +522,7 @@ void ProcessSellRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(IsRsiCrossBelow(rsi_prev, rsi_curr, InpRsiLower))
+      if(IsRsiBreakBelowLevel(rsi, InpRsiLower))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
          g_grace_remaining = CalcGraceBarsForTrigger();
@@ -534,13 +535,13 @@ void ProcessSellRsiOnClosedBar()
 //+------------------------------------------------------------------+
 void ProcessBuyRsiOnClosedBar()
   {
-   double rsi_curr = 0.0, rsi_prev = 0.0;
-   if(!GetRsiPair(1, rsi_curr, rsi_prev))
+   double rsi = 0.0;
+   if(!GetRsiValue(1, rsi))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(IsRsiCrossBelow(rsi_prev, rsi_curr, InpRsiLower))
+      if(IsRsiBreakBelowLevel(rsi, InpRsiLower))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -549,7 +550,7 @@ void ProcessBuyRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(IsRsiCrossAbove(rsi_prev, rsi_curr, InpRsiUpper))
+      if(IsRsiBreakAboveLevel(rsi, InpRsiUpper))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
          g_grace_remaining = CalcGraceBarsForTrigger();
