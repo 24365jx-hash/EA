@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
 //| IDC_8.mq4 - GOLD M1 SYSTEM (MT4)                                 |
-//| EMA cross + RSI cross + fast EMA candle confirmation             |
+//| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.01"
+#property version   "3.02"
 #property strict
 
 enum ENUM_CYCLE
@@ -128,6 +128,24 @@ void UpdateBrokerTime()
 string FormatBrokerTime(const datetime t)
   {
    return TimeToString(t, TIME_DATE | TIME_MINUTES | TIME_SECONDS);
+  }
+
+//+------------------------------------------------------------------+
+string TimeframeLabel()
+  {
+   switch(Period())
+     {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      case PERIOD_W1:  return "W1";
+      case PERIOD_MN1: return "MN1";
+      default:         return IntegerToString(Period());
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -361,27 +379,28 @@ bool GetEmaPair(const int shift, double &fast_ema, double &slow_ema)
   }
 
 //+------------------------------------------------------------------+
-bool GetRsiValue(const int shift, double &rsi)
+bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
   {
-   if(iBars(TradeSymbol(), Period()) < InpRsiPeriod + shift + 2)
+   if(iBars(TradeSymbol(), Period()) < InpRsiPeriod + shift + 3)
       return false;
 
-   rsi = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
+   rsi_curr = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift);
+   rsi_prev = iRSI(TradeSymbol(), Period(), InpRsiPeriod, PRICE_CLOSE, shift + 1);
    return true;
   }
 
 //+------------------------------------------------------------------+
-//| Closed-bar RSI level breach (touch = break, original strategy)   |
+//| RSI baseline breakout on closed bar (prev side -> curr side)     |
 //+------------------------------------------------------------------+
-bool IsRsiBreakAboveLevel(const double rsi, const double level)
+bool IsRsiBreakoutAbove(const double rsi_prev, const double rsi_curr, const double level)
   {
-   return (rsi >= level);
+   return (rsi_prev <= level && rsi_curr > level);
   }
 
 //+------------------------------------------------------------------+
-bool IsRsiBreakBelowLevel(const double rsi, const double level)
+bool IsRsiBreakoutBelow(const double rsi_prev, const double rsi_curr, const double level)
   {
-   return (rsi <= level);
+   return (rsi_prev >= level && rsi_curr < level);
   }
 
 //+------------------------------------------------------------------+
@@ -507,13 +526,13 @@ void DetectEmaCrossOnClosedBar()
 //+------------------------------------------------------------------+
 void ProcessSellRsiOnClosedBar()
   {
-   double rsi = 0.0;
-   if(!GetRsiValue(1, rsi))
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(IsRsiBreakAboveLevel(rsi, InpRsiUpper))
+      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -522,7 +541,7 @@ void ProcessSellRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(IsRsiBreakBelowLevel(rsi, InpRsiLower))
+      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
          g_grace_remaining = CalcGraceBarsForTrigger();
@@ -535,13 +554,13 @@ void ProcessSellRsiOnClosedBar()
 //+------------------------------------------------------------------+
 void ProcessBuyRsiOnClosedBar()
   {
-   double rsi = 0.0;
-   if(!GetRsiValue(1, rsi))
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
    if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
      {
-      if(IsRsiBreakBelowLevel(rsi, InpRsiLower))
+      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
         {
          g_rsi_armed   = true;
          g_setup_phase = PHASE_WAIT_RSI_ARM;
@@ -550,7 +569,7 @@ void ProcessBuyRsiOnClosedBar()
 
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
-      if(IsRsiBreakAboveLevel(rsi, InpRsiUpper))
+      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
         {
          g_setup_phase     = PHASE_WAIT_EMA;
          g_grace_remaining = CalcGraceBarsForTrigger();
@@ -1091,6 +1110,7 @@ int OnInit()
 
    Print("IDC_8 init | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
+         " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
          " | offset=", BrokerOffsetLabel(),
          " | stop level pts=", DoubleToString(GetStopLevelPts(), 0),
