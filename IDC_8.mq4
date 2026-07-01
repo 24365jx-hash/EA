@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.02"
+#property version   "3.03"
 #property strict
 
 enum ENUM_CYCLE
@@ -36,6 +36,14 @@ input double InpRsiLower  = 48.0;
 //--- Entry rules
 input int InpObservationBars = 30;
 input int InpEmaGraceBars    = 3;
+
+//--- Range filters (chop block)
+input bool InpUseEmaSepFilter    = true;  // 9-50 EMA separation filter
+input int  InpMinEmaSepPts       = 100;   // Min |9EMA-50EMA| (points)
+input bool InpUseEmaAngleFilter  = true;  // EMA34 angle filter
+input int  InpAngleEmaPeriod     = 34;    // Angle EMA period
+input int  InpAngleLookback      = 7;     // Angle lookback bars
+input int  InpMinAngleSlopePts   = 35;    // Min slope over lookback (points)
 
 //--- Risk / exit
 input double InpLots             = 0.01;
@@ -401,6 +409,75 @@ bool IsRsiBreakoutAbove(const double rsi_prev, const double rsi_curr, const doub
 bool IsRsiBreakoutBelow(const double rsi_prev, const double rsi_curr, const double level)
   {
    return (rsi_prev >= level && rsi_curr < level);
+  }
+
+//+------------------------------------------------------------------+
+bool GetEmaAtShift(const int period, const int shift, double &ema)
+  {
+   if(iBars(TradeSymbol(), Period()) < period + shift + 2)
+      return false;
+
+   ema = iMA(TradeSymbol(), Period(), period, 0, MODE_EMA, PRICE_CLOSE, shift);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+bool PassesEmaSeparationFilter()
+  {
+   if(!InpUseEmaSepFilter)
+      return true;
+   if(InpMinEmaSepPts <= 0)
+      return true;
+
+   double fast_ema = 0.0;
+   double slow_ema = 0.0;
+   if(!GetFastEma(1, fast_ema))
+      return false;
+   if(!GetEmaAtShift(InpSlowEmaPeriod, 1, slow_ema))
+      return false;
+
+   double sep_pts = MathAbs(fast_ema - slow_ema) / TradePoint();
+   return (sep_pts >= InpMinEmaSepPts);
+  }
+
+//+------------------------------------------------------------------+
+bool PassesEmaAngleFilter(const int order_type)
+  {
+   if(!InpUseEmaAngleFilter)
+      return true;
+   if(InpMinAngleSlopePts <= 0)
+      return true;
+   if(InpAngleLookback < 1)
+      return true;
+
+   double ema_now  = 0.0;
+   double ema_prev = 0.0;
+   int    shift_prev = 1 + InpAngleLookback;
+
+   if(!GetEmaAtShift(InpAngleEmaPeriod, 1, ema_now))
+      return false;
+   if(!GetEmaAtShift(InpAngleEmaPeriod, shift_prev, ema_prev))
+      return false;
+
+   double slope_pts = (ema_now - ema_prev) / TradePoint();
+
+   if(order_type == OP_SELL)
+      return (slope_pts <= -InpMinAngleSlopePts);
+
+   if(order_type == OP_BUY)
+      return (slope_pts >= InpMinAngleSlopePts);
+
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool PassesRangeFilters(const int order_type)
+  {
+   if(!PassesEmaSeparationFilter())
+      return false;
+   if(!PassesEmaAngleFilter(order_type))
+      return false;
+   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -882,7 +959,8 @@ void TrySellEntryOnClosedBar()
 
    if(IsSellEmaConfirm(1))
      {
-      OpenPositionAtSetupClose(OP_SELL);
+      if(PassesRangeFilters(OP_SELL))
+         OpenPositionAtSetupClose(OP_SELL);
       return;
      }
 
@@ -911,7 +989,8 @@ void TryBuyEntryOnClosedBar()
 
    if(IsBuyEmaConfirm(1))
      {
-      OpenPositionAtSetupClose(OP_BUY);
+      if(PassesRangeFilters(OP_BUY))
+         OpenPositionAtSetupClose(OP_BUY);
       return;
      }
 
@@ -1065,6 +1144,26 @@ bool ValidateInputs()
    if(InpEmaGraceBars < 1)
      {
       Print("IDC_8: EMA grace bars must be >= 1");
+      return false;
+     }
+   if(InpMinEmaSepPts < 0)
+     {
+      Print("IDC_8: min EMA separation points must be >= 0");
+      return false;
+     }
+   if(InpAngleEmaPeriod < 2)
+     {
+      Print("IDC_8: angle EMA period must be >= 2");
+      return false;
+     }
+   if(InpAngleLookback < 1)
+     {
+      Print("IDC_8: angle lookback bars must be >= 1");
+      return false;
+     }
+   if(InpMinAngleSlopePts < 0)
+     {
+      Print("IDC_8: min angle slope points must be >= 0");
       return false;
      }
    if(InpLots <= 0.0)

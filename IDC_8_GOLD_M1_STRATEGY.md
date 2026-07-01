@@ -91,4 +91,21 @@
 
 ---
 
-*EA 파일: `IDC_8.mq4` v3.02*
+*EA 파일: `IDC_8.mq4` v3.03*
+
+---
+
+## 8. 횡보 차단 필터 (v3.03)
+
+| 파라미터 | 디폴트 | 설명 |
+|----------|--------|------|
+| `InpUseEmaSepFilter` | true | 9-50 EMA 이격 필터 on/off |
+| `InpMinEmaSepPts` | 100 | \|9EMA−50EMA\| 최소 (pt) |
+| `InpUseEmaAngleFilter` | true | EMA34 각도 필터 on/off |
+| `InpAngleEmaPeriod` | 34 | 각도 측정 EMA |
+| `InpAngleLookback` | 7 | 기울기 lookback (봉) |
+| `InpMinAngleSlopePts` | 35 | 최소 기울기 (pt) |
+
+- SELL: slope ≤ −35pt / BUY: slope ≥ +35pt
+- 진입 직전(9EMA 캔들 확인 후) 적용
+- 필터만 실패 시 유예 카운트 소모 없음
