@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.02
+## 원본 전략 자료 (Official Strategy Document) v3.04
 
 | 항목 | 내용 |
 |------|------|
@@ -75,7 +75,7 @@
 
 ## 6. 파라미터 (전부 사용자 설정)
 
-`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts`, `InpTradeComment`
+`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpUseEmaSepFilter`, `InpMinEmaSepPts`, `InpUseEmaAngleFilter`, `InpAngleEmaPeriod`, `InpAngleLookback`, `InpMinAngleDeg`, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts`, `InpTradeComment`
 
 ---
 
@@ -91,21 +91,35 @@
 
 ---
 
-*EA 파일: `IDC_8.mq4` v3.03*
+*EA 파일: `IDC_8.mq4` v3.04*
 
 ---
 
-## 8. 횡보 차단 필터 (v3.03)
+## 8. 횡보 차단 필터 (v3.03+)
+
+### 8.1 EMA 이격
 
 | 파라미터 | 디폴트 | 설명 |
 |----------|--------|------|
 | `InpUseEmaSepFilter` | true | 9-50 EMA 이격 필터 on/off |
 | `InpMinEmaSepPts` | 100 | \|9EMA−50EMA\| 최소 (pt) |
+
+### 8.2 EMA34 시각 각도 (v3.04 — 도 단위)
+
+MT4 **MA Angle** 지표와 동일한 시각 각도 공식:
+
+```
+각도(°) = atan( (EMA[1] − EMA[1+N]) / (N × Point) ) × 180 / π
+```
+
+| 파라미터 | 디폴트 | 설명 |
+|----------|--------|------|
 | `InpUseEmaAngleFilter` | true | EMA34 각도 필터 on/off |
 | `InpAngleEmaPeriod` | 34 | 각도 측정 EMA |
-| `InpAngleLookback` | 7 | 기울기 lookback (봉) |
-| `InpMinAngleSlopePts` | 35 | 최소 기울기 (pt) |
+| `InpAngleLookback` | 7 | lookback N (봉) |
+| `InpMinAngleDeg` | **78.7** | 최소 \|각도\| (도) |
 
-- SELL: slope ≤ −35pt / BUY: slope ≥ +35pt
+- **SELL:** 각도 ≤ −78.7° / **BUY:** 각도 ≥ +78.7°
+- v3.03 `35pt` 기울기(7봉)와 **동등**: `atan(35/7) ≈ 78.7°`
 - 진입 직전(9EMA 캔들 확인 후) 적용
 - 필터만 실패 시 유예 카운트 소모 없음

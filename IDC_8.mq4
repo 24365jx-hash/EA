@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.03"
+#property version   "3.04"
 #property strict
 
 enum ENUM_CYCLE
@@ -40,10 +40,10 @@ input int InpEmaGraceBars    = 3;
 //--- Range filters (chop block)
 input bool InpUseEmaSepFilter    = true;  // 9-50 EMA separation filter
 input int  InpMinEmaSepPts       = 100;   // Min |9EMA-50EMA| (points)
-input bool InpUseEmaAngleFilter  = true;  // EMA34 angle filter
-input int  InpAngleEmaPeriod     = 34;    // Angle EMA period
-input int  InpAngleLookback      = 7;     // Angle lookback bars
-input int  InpMinAngleSlopePts   = 35;    // Min slope over lookback (points)
+input bool   InpUseEmaAngleFilter = true;  // EMA34 angle filter
+input int    InpAngleEmaPeriod    = 34;    // Angle EMA period
+input int    InpAngleLookback     = 7;     // Angle lookback bars
+input double InpMinAngleDeg       = 78.7;  // Min |EMA angle| (degrees, chart-visual)
 
 //--- Risk / exit
 input double InpLots             = 0.01;
@@ -441,31 +441,59 @@ bool PassesEmaSeparationFilter()
   }
 
 //+------------------------------------------------------------------+
+//| Chart-visual EMA angle (MT4 MA Angle standard, degrees)          |
+//| angle = atan( rise / (lookback * point) ) * 180/pi               |
+//| rise  = EMA[base_shift] - EMA[base_shift + lookback]             |
+//+------------------------------------------------------------------+
+bool GetEmaVisualAngleDeg(const int ema_period,
+                          const int lookback,
+                          const int base_shift,
+                          double &angle_deg)
+  {
+   if(lookback < 1)
+      return false;
+
+   double point = TradePoint();
+   if(point <= 0.0)
+      return false;
+
+   double ema_now  = 0.0;
+   double ema_prev = 0.0;
+   int    shift_prev = base_shift + lookback;
+
+   if(!GetEmaAtShift(ema_period, base_shift, ema_now))
+      return false;
+   if(!GetEmaAtShift(ema_period, shift_prev, ema_prev))
+      return false;
+
+   double rise = ema_now - ema_prev;
+   double run  = (double)lookback * point;
+   if(run <= 0.0)
+      return false;
+
+   angle_deg = MathArctan(rise / run) * 180.0 / 3.14159265358979323846;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 bool PassesEmaAngleFilter(const int order_type)
   {
    if(!InpUseEmaAngleFilter)
       return true;
-   if(InpMinAngleSlopePts <= 0)
+   if(InpMinAngleDeg <= 0.0)
       return true;
    if(InpAngleLookback < 1)
       return true;
 
-   double ema_now  = 0.0;
-   double ema_prev = 0.0;
-   int    shift_prev = 1 + InpAngleLookback;
-
-   if(!GetEmaAtShift(InpAngleEmaPeriod, 1, ema_now))
+   double angle_deg = 0.0;
+   if(!GetEmaVisualAngleDeg(InpAngleEmaPeriod, InpAngleLookback, 1, angle_deg))
       return false;
-   if(!GetEmaAtShift(InpAngleEmaPeriod, shift_prev, ema_prev))
-      return false;
-
-   double slope_pts = (ema_now - ema_prev) / TradePoint();
 
    if(order_type == OP_SELL)
-      return (slope_pts <= -InpMinAngleSlopePts);
+      return (angle_deg <= -InpMinAngleDeg);
 
    if(order_type == OP_BUY)
-      return (slope_pts >= InpMinAngleSlopePts);
+      return (angle_deg >= InpMinAngleDeg);
 
    return false;
   }
@@ -1161,9 +1189,14 @@ bool ValidateInputs()
       Print("IDC_8: angle lookback bars must be >= 1");
       return false;
      }
-   if(InpMinAngleSlopePts < 0)
+   if(InpMinAngleDeg < 0.0)
      {
-      Print("IDC_8: min angle slope points must be >= 0");
+      Print("IDC_8: min EMA angle degrees must be >= 0");
+      return false;
+     }
+   if(InpMinAngleDeg >= 90.0)
+     {
+      Print("IDC_8: min EMA angle degrees must be < 90");
       return false;
      }
    if(InpLots <= 0.0)
