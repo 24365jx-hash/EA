@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.04"
+#property version   "3.05"
 #property strict
 
 enum ENUM_CYCLE
@@ -65,9 +65,10 @@ ENUM_SETUP_PHASE g_setup_phase      = PHASE_IDLE;
 datetime         g_cycle_start_time = 0;
 bool             g_entry_taken      = false;
 
-bool     g_rsi_armed       = false;
-int      g_grace_remaining = 0;
-datetime g_last_bar_time   = 0;
+bool     g_rsi_armed         = false;
+int      g_grace_remaining   = 0;
+datetime g_rsi_trigger_time  = 0;
+datetime g_last_bar_time     = 0;
 
 //+------------------------------------------------------------------+
 string TradeSymbol()
@@ -342,9 +343,10 @@ bool HasOpenPosition()
 //+------------------------------------------------------------------+
 void ResetSetupState()
   {
-   g_setup_phase     = PHASE_IDLE;
-   g_rsi_armed       = false;
-   g_grace_remaining = 0;
+   g_setup_phase      = PHASE_IDLE;
+   g_rsi_armed        = false;
+   g_grace_remaining  = 0;
+   g_rsi_trigger_time = 0;
   }
 
 //+------------------------------------------------------------------+
@@ -597,6 +599,28 @@ bool IsObservationWindowExpired()
   }
 
 //+------------------------------------------------------------------+
+int BarsSinceRsiTrigger()
+  {
+   if(g_rsi_trigger_time == 0)
+      return 2147483647;
+
+   int shift = iBarShift(TradeSymbol(), Period(), g_rsi_trigger_time, true);
+   if(shift < 0)
+      return 2147483647;
+
+   return shift;
+  }
+
+//+------------------------------------------------------------------+
+bool IsEmaGraceWindowExpired()
+  {
+   if(g_rsi_trigger_time == 0)
+      return (g_grace_remaining <= 0);
+
+   return (BarsSinceRsiTrigger() > InpEmaGraceBars);
+  }
+
+//+------------------------------------------------------------------+
 int CalcGraceBarsForTrigger()
   {
    int remaining = RemainingObservationBars();
@@ -648,8 +672,9 @@ void ProcessSellRsiOnClosedBar()
      {
       if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
         {
-         g_setup_phase     = PHASE_WAIT_EMA;
-         g_grace_remaining = CalcGraceBarsForTrigger();
+         g_setup_phase      = PHASE_WAIT_EMA;
+         g_rsi_trigger_time = iTime(TradeSymbol(), Period(), 1);
+         g_grace_remaining  = CalcGraceBarsForTrigger();
          if(g_grace_remaining <= 0)
             ResetSetupState();
         }
@@ -676,8 +701,9 @@ void ProcessBuyRsiOnClosedBar()
      {
       if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
         {
-         g_setup_phase     = PHASE_WAIT_EMA;
-         g_grace_remaining = CalcGraceBarsForTrigger();
+         g_setup_phase      = PHASE_WAIT_EMA;
+         g_rsi_trigger_time = iTime(TradeSymbol(), Period(), 1);
+         g_grace_remaining  = CalcGraceBarsForTrigger();
          if(g_grace_remaining <= 0)
             ResetSetupState();
         }
@@ -898,8 +924,6 @@ void ProtectAllPositionsStopLoss()
 //+------------------------------------------------------------------+
 bool OpenPositionAtSetupClose(const int order_type)
   {
-   g_entry_taken = true;
-
    RefreshRates();
 
    double setup_close = GetSetupClosePrice();
@@ -951,6 +975,8 @@ bool OpenPositionAtSetupClose(const int order_type)
       return false;
      }
 
+   g_entry_taken = true;
+
    if(OrderSelect(ticket, SELECT_BY_TICKET))
      {
       if(OrderStopLoss() <= 0.0)
@@ -958,6 +984,7 @@ bool OpenPositionAtSetupClose(const int order_type)
          if(!AttachMissingStopLoss(ticket))
            {
             Print("IDC_8: CRITICAL - opened without SL, restore failed. ticket=", ticket);
+            g_entry_taken = false;
             return false;
            }
         }
@@ -979,22 +1006,22 @@ void TrySellEntryOnClosedBar()
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
       return;
-   if(g_grace_remaining <= 0)
+   if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
      {
       ResetSetupState();
       return;
      }
 
-   if(IsSellEmaConfirm(1))
-     {
-      if(PassesRangeFilters(OP_SELL))
-         OpenPositionAtSetupClose(OP_SELL);
-      return;
-     }
+   bool entered = false;
+   if(IsSellEmaConfirm(1) && PassesRangeFilters(OP_SELL))
+      entered = OpenPositionAtSetupClose(OP_SELL);
 
-   g_grace_remaining--;
-   if(g_grace_remaining <= 0)
-      ResetSetupState();
+   if(!entered)
+     {
+      g_grace_remaining--;
+      if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
+         ResetSetupState();
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -1009,22 +1036,22 @@ void TryBuyEntryOnClosedBar()
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
       return;
-   if(g_grace_remaining <= 0)
+   if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
      {
       ResetSetupState();
       return;
      }
 
-   if(IsBuyEmaConfirm(1))
-     {
-      if(PassesRangeFilters(OP_BUY))
-         OpenPositionAtSetupClose(OP_BUY);
-      return;
-     }
+   bool entered = false;
+   if(IsBuyEmaConfirm(1) && PassesRangeFilters(OP_BUY))
+      entered = OpenPositionAtSetupClose(OP_BUY);
 
-   g_grace_remaining--;
-   if(g_grace_remaining <= 0)
-      ResetSetupState();
+   if(!entered)
+     {
+      g_grace_remaining--;
+      if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
+         ResetSetupState();
+     }
   }
 
 //+------------------------------------------------------------------+
