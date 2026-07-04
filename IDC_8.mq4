@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.05"
+#property version   "3.06"
 #property strict
 
 enum ENUM_CYCLE
@@ -633,6 +633,9 @@ int CalcGraceBarsForTrigger()
 //+------------------------------------------------------------------+
 void DetectEmaCrossOnClosedBar()
   {
+   if(HasOpenPosition())
+      return;
+
    double fast_curr = 0.0, slow_curr = 0.0;
    double fast_prev = 0.0, slow_prev = 0.0;
 
@@ -982,11 +985,8 @@ bool OpenPositionAtSetupClose(const int order_type)
       if(OrderStopLoss() <= 0.0)
         {
          if(!AttachMissingStopLoss(ticket))
-           {
-            Print("IDC_8: CRITICAL - opened without SL, restore failed. ticket=", ticket);
-            g_entry_taken = false;
-            return false;
-           }
+            Print("IDC_8: CRITICAL - opened without SL, restore failed. ticket=", ticket,
+                  " (ProtectAllPositionsStopLoss will retry each tick)");
         }
      }
 
@@ -1199,6 +1199,11 @@ bool ValidateInputs()
    if(InpEmaGraceBars < 1)
      {
       Print("IDC_8: EMA grace bars must be >= 1");
+      return false;
+     }
+   if(InpEmaGraceBars > InpObservationBars)
+     {
+      Print("IDC_8: EMA grace bars must be <= observation bars");
       return false;
      }
    if(InpMinEmaSepPts < 0)
