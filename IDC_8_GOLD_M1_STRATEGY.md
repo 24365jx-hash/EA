@@ -139,11 +139,13 @@ slope_atr = (EMA34[1] − EMA34[1+N]) / ATR(N)[1]
 | 진입 직전 최종 방어 | `IsSetupEntryPermitted()` |
 | 필터/슬리피지 실패 시 유예 1봉 소모 | `TrySell/BuyEntry` grace-- |
 
-### 8.4 디버그 로그 (v3.09)
+### 8.4 디버그 로그 (v3.09+)
 
 | 파라미터 | 디폴트 | 설명 |
 |----------|--------|------|
-| `InpDebugBarLog` | false | 매봉 필터 O/X 로그 (전문가 탭) |
+| `InpDebugBarLog` | false | 매봉 필터 O/X 로그 — **진입 판정 직전** (전문가 탭) |
+
+v3.10: 체결 시 `IDC_8|ENTRY|DONE|SELL|bar=...|ticket=...` 추가 출력.
 
 ---
 
