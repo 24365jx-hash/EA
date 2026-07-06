@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.06
+## 원본 전략 자료 (Official Strategy Document) v3.07
 
 | 항목 | 내용 |
 |------|------|
@@ -20,6 +20,7 @@
 - 데드크로스 이후: **SELL만**
 - 골든크로스 이후: **BUY만**
 - 크로스 사이클당: **1회 진입**
+- 크로스 사이클당: **RSI→EMA 기회 1회** (유예 만료 시 재시도 없음)
 
 ---
 
@@ -43,7 +44,7 @@
 | 1 | 데드크로스 (9EMA ↓ 50EMA) |
 | 2 | 데드크로스 후 **N봉** 이내 (크로스봉 포함) |
 | 3 | RSI **52 상향 돌파** → **48 하향 돌파** |
-| 4 | 9EMA 하향 이탈 + 종가 아래 + 몸통>꼬리 (RSI봉 포함 **3봉** 유예) |
+| 4 | 9EMA 하향 이탈 + 종가 아래 + 몸통>꼬리 (RSI 2단계 완료봉 포함 **3봉** 유예) |
 | 5 | 사이클당 1회 |
 | 6 | 데드크로스 후 SELL만 |
 
@@ -86,12 +87,14 @@
 | 반대 방향 진입 | 금지 |
 | 관찰구간 초과 | 무효 |
 | 사이클 2회 진입 | 금지 |
+| 사이클 2회 RSI→EMA | 금지 (v3.07) |
 | RSI 체류만 (돌파 없음) | **무효** |
+| 3봉 유예 초과 진입 | **금지** |
 | SL 미설정 | 금지 |
 
 ---
 
-*EA 파일: `IDC_8.mq4` v3.06*
+*EA 파일: `IDC_8.mq4` v3.07*
 
 ---
 
@@ -106,8 +109,6 @@
 
 ### 8.2 EMA34 시각 각도 (v3.04 — 도 단위)
 
-MT4 **MA Angle** 지표와 동일한 시각 각도 공식:
-
 ```
 각도(°) = atan( (EMA[1] − EMA[1+N]) / (N × Point) ) × 180 / π
 ```
@@ -119,14 +120,13 @@ MT4 **MA Angle** 지표와 동일한 시각 각도 공식:
 | `InpAngleLookback` | 7 | lookback N (봉) |
 | `InpMinAngleDeg` | **78.7** | 최소 \|각도\| (도) |
 
-- **SELL:** 각도 ≤ −78.7° / **BUY:** 각도 ≥ +78.7°
-- v3.03 `35pt` 기울기(7봉)와 **동등**: `atan(35/7) ≈ 78.7°`
-- 진입 직전(9EMA 캔들 확인 후) 적용
+### 8.3 RSI→EMA 유예 (v3.07 완전무결)
 
-### 8.3 RSI→EMA 유예 (v3.05+)
-
-- RSI 2단계 돌파 완료 봉 포함 **최대 3봉** 이내만 9EMA 진입 허용
-- `g_rsi_trigger_time` + `g_grace_remaining` 이중 만료 검사
-- 9EMA 확인됐으나 필터/슬리피지 실패 시에도 **유예 1봉 소모**
-- 포지션 보유 중 EMA 크로스 재감지 **무시** (사이클 상태 보호, v3.06)
-- OrderSend 성공 후 `g_entry_taken` **영구 잠금** (SL 복구 실패에도 재진입 불가, v3.06)
+| 규칙 | 구현 |
+|------|------|
+| RSI 2단계 완료봉 포함 최대 3봉 | `g_rsi_trigger_time` + `g_grace_remaining` + `IsEmaGraceWindowExpired()` |
+| 유예 만료 후 RSI 재시작 금지 | `g_rsi_to_ema_used` + `PHASE_SETUP_EXHAUSTED` |
+| 진입 직전 최종 방어 | `IsSetupEntryPermitted()` in `OpenPositionAtSetupClose()` |
+| 필터/슬리피지 실패 시 유예 1봉 소모 | `TrySell/BuyEntry` grace-- |
+| 포지션 중 크로스 무시 | `DetectEmaCross` + `HasOpenPosition()` |
+| OrderSend 성공 후 사이클 잠금 | `g_entry_taken` |

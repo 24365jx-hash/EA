@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.06"
+#property version   "3.07"
 #property strict
 
 enum ENUM_CYCLE
@@ -15,9 +15,10 @@ enum ENUM_CYCLE
 
 enum ENUM_SETUP_PHASE
   {
-   PHASE_IDLE         = 0,
-   PHASE_WAIT_RSI_ARM = 1,
-   PHASE_WAIT_EMA     = 2
+   PHASE_IDLE            = 0,
+   PHASE_WAIT_RSI_ARM    = 1,
+   PHASE_WAIT_EMA        = 2,
+   PHASE_SETUP_EXHAUSTED = 3
   };
 
 //--- Symbol / broker
@@ -66,6 +67,7 @@ datetime         g_cycle_start_time = 0;
 bool             g_entry_taken      = false;
 
 bool     g_rsi_armed         = false;
+bool     g_rsi_to_ema_used   = false;
 int      g_grace_remaining   = 0;
 datetime g_rsi_trigger_time  = 0;
 datetime g_last_bar_time     = 0;
@@ -350,11 +352,21 @@ void ResetSetupState()
   }
 
 //+------------------------------------------------------------------+
+void ExpireEmaGraceWindow()
+  {
+   g_setup_phase      = PHASE_SETUP_EXHAUSTED;
+   g_rsi_armed        = false;
+   g_grace_remaining  = 0;
+   g_rsi_trigger_time = 0;
+  }
+
+//+------------------------------------------------------------------+
 void ResetCycleState()
   {
    g_cycle            = CYCLE_NONE;
    g_cycle_start_time = 0;
    g_entry_taken      = false;
+   g_rsi_to_ema_used  = false;
    ResetSetupState();
   }
 
@@ -364,6 +376,7 @@ void StartCycle(const ENUM_CYCLE cycle, const datetime bar_time)
    g_cycle            = cycle;
    g_cycle_start_time = bar_time;
    g_entry_taken      = false;
+   g_rsi_to_ema_used  = false;
    ResetSetupState();
   }
 
@@ -631,6 +644,51 @@ int CalcGraceBarsForTrigger()
   }
 
 //+------------------------------------------------------------------+
+bool BeginWaitEmaPhase()
+  {
+   if(g_rsi_to_ema_used)
+      return false;
+
+   g_setup_phase      = PHASE_WAIT_EMA;
+   g_rsi_to_ema_used  = true;
+   g_rsi_trigger_time = iTime(TradeSymbol(), Period(), 1);
+   g_grace_remaining  = CalcGraceBarsForTrigger();
+
+   if(g_grace_remaining <= 0)
+     {
+      ExpireEmaGraceWindow();
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+bool IsSetupEntryPermitted(const int order_type)
+  {
+   if(g_entry_taken)
+      return false;
+   if(g_setup_phase != PHASE_WAIT_EMA)
+      return false;
+   if(!g_rsi_to_ema_used)
+      return false;
+   if(g_rsi_trigger_time == 0)
+      return false;
+   if(g_grace_remaining <= 0)
+      return false;
+   if(IsEmaGraceWindowExpired())
+      return false;
+   if(IsObservationWindowExpired())
+      return false;
+
+   if(order_type == OP_BUY && g_cycle != CYCLE_BUY)
+      return false;
+   if(order_type == OP_SELL && g_cycle != CYCLE_SELL)
+      return false;
+
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 void DetectEmaCrossOnClosedBar()
   {
    if(HasOpenPosition())
@@ -658,6 +716,11 @@ void DetectEmaCrossOnClosedBar()
 //+------------------------------------------------------------------+
 void ProcessSellRsiOnClosedBar()
   {
+   if(g_setup_phase == PHASE_SETUP_EXHAUSTED)
+      return;
+   if(g_rsi_to_ema_used && g_setup_phase != PHASE_WAIT_EMA)
+      return;
+
    double rsi_curr = 0.0, rsi_prev = 0.0;
    if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
@@ -674,19 +737,18 @@ void ProcessSellRsiOnClosedBar()
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
       if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
-        {
-         g_setup_phase      = PHASE_WAIT_EMA;
-         g_rsi_trigger_time = iTime(TradeSymbol(), Period(), 1);
-         g_grace_remaining  = CalcGraceBarsForTrigger();
-         if(g_grace_remaining <= 0)
-            ResetSetupState();
-        }
+         BeginWaitEmaPhase();
      }
   }
 
 //+------------------------------------------------------------------+
 void ProcessBuyRsiOnClosedBar()
   {
+   if(g_setup_phase == PHASE_SETUP_EXHAUSTED)
+      return;
+   if(g_rsi_to_ema_used && g_setup_phase != PHASE_WAIT_EMA)
+      return;
+
    double rsi_curr = 0.0, rsi_prev = 0.0;
    if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
@@ -703,13 +765,7 @@ void ProcessBuyRsiOnClosedBar()
    if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
      {
       if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
-        {
-         g_setup_phase      = PHASE_WAIT_EMA;
-         g_rsi_trigger_time = iTime(TradeSymbol(), Period(), 1);
-         g_grace_remaining  = CalcGraceBarsForTrigger();
-         if(g_grace_remaining <= 0)
-            ResetSetupState();
-        }
+         BeginWaitEmaPhase();
      }
   }
 
@@ -927,6 +983,14 @@ void ProtectAllPositionsStopLoss()
 //+------------------------------------------------------------------+
 bool OpenPositionAtSetupClose(const int order_type)
   {
+   if(!IsSetupEntryPermitted(order_type))
+     {
+      Print("IDC_8: entry blocked by setup guard. phase=", (int)g_setup_phase,
+            " grace=", g_grace_remaining,
+            " bars_since_rsi=", BarsSinceRsiTrigger());
+      return false;
+     }
+
    RefreshRates();
 
    double setup_close = GetSetupClosePrice();
@@ -1008,7 +1072,7 @@ void TrySellEntryOnClosedBar()
       return;
    if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
      {
-      ResetSetupState();
+      ExpireEmaGraceWindow();
       return;
      }
 
@@ -1020,7 +1084,7 @@ void TrySellEntryOnClosedBar()
      {
       g_grace_remaining--;
       if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
-         ResetSetupState();
+         ExpireEmaGraceWindow();
      }
   }
 
@@ -1038,7 +1102,7 @@ void TryBuyEntryOnClosedBar()
       return;
    if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
      {
-      ResetSetupState();
+      ExpireEmaGraceWindow();
       return;
      }
 
@@ -1050,7 +1114,7 @@ void TryBuyEntryOnClosedBar()
      {
       g_grace_remaining--;
       if(g_grace_remaining <= 0 || IsEmaGraceWindowExpired())
-         ResetSetupState();
+         ExpireEmaGraceWindow();
      }
   }
 
