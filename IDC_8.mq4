@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.07"
+#property version   "3.08"
 #property strict
 
 enum ENUM_CYCLE
@@ -66,9 +66,11 @@ ENUM_SETUP_PHASE g_setup_phase      = PHASE_IDLE;
 datetime         g_cycle_start_time = 0;
 bool             g_entry_taken      = false;
 
-bool     g_rsi_armed         = false;
-bool     g_rsi_to_ema_used   = false;
-int      g_grace_remaining   = 0;
+bool     g_rsi_armed              = false;
+bool     g_rsi_to_ema_used        = false;
+bool     g_rsi_seen_above_upper   = false;
+bool     g_rsi_seen_below_lower   = false;
+int      g_grace_remaining        = 0;
 datetime g_rsi_trigger_time  = 0;
 datetime g_last_bar_time     = 0;
 
@@ -365,18 +367,22 @@ void ResetCycleState()
   {
    g_cycle            = CYCLE_NONE;
    g_cycle_start_time = 0;
-   g_entry_taken      = false;
-   g_rsi_to_ema_used  = false;
+   g_entry_taken           = false;
+   g_rsi_to_ema_used       = false;
+   g_rsi_seen_above_upper  = false;
+   g_rsi_seen_below_lower  = false;
    ResetSetupState();
   }
 
 //+------------------------------------------------------------------+
 void StartCycle(const ENUM_CYCLE cycle, const datetime bar_time)
   {
-   g_cycle            = cycle;
-   g_cycle_start_time = bar_time;
-   g_entry_taken      = false;
-   g_rsi_to_ema_used  = false;
+   g_cycle                 = cycle;
+   g_cycle_start_time      = bar_time;
+   g_entry_taken           = false;
+   g_rsi_to_ema_used       = false;
+   g_rsi_seen_above_upper  = false;
+   g_rsi_seen_below_lower  = false;
    ResetSetupState();
   }
 
@@ -546,11 +552,8 @@ bool IsSellEmaConfirm(const int shift)
       return false;
 
    double close = iClose(TradeSymbol(), Period(), shift);
-   double low   = iLow(TradeSymbol(), Period(), shift);
 
    if(close >= fast_ema)
-      return false;
-   if(low >= fast_ema)
       return false;
    if(!IsBodyDominant(shift))
       return false;
@@ -566,11 +569,8 @@ bool IsBuyEmaConfirm(const int shift)
       return false;
 
    double close = iClose(TradeSymbol(), Period(), shift);
-   double high  = iHigh(TradeSymbol(), Period(), shift);
 
    if(close <= fast_ema)
-      return false;
-   if(high <= fast_ema)
       return false;
    if(!IsBodyDominant(shift))
       return false;
@@ -725,20 +725,21 @@ void ProcessSellRsiOnClosedBar()
    if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
-   if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
+   if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
+      g_rsi_seen_above_upper = true;
+   else if(rsi_curr > InpRsiUpper || rsi_prev > InpRsiUpper)
+      g_rsi_seen_above_upper = true;
+
+   if(g_rsi_seen_above_upper)
      {
-      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
-        {
-         g_rsi_armed   = true;
+      g_rsi_armed = true;
+      if(g_setup_phase == PHASE_IDLE)
          g_setup_phase = PHASE_WAIT_RSI_ARM;
-        }
      }
 
-   if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
-     {
-      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
-         BeginWaitEmaPhase();
-     }
+   // 52 확인 후 종가 < 48이면 2단계 완료 (엄격 돌파 + 완만/급락 하락 모두 포함)
+   if(g_rsi_seen_above_upper && g_setup_phase != PHASE_WAIT_EMA && rsi_curr < InpRsiLower)
+      BeginWaitEmaPhase();
   }
 
 //+------------------------------------------------------------------+
@@ -753,20 +754,20 @@ void ProcessBuyRsiOnClosedBar()
    if(!GetRsiPair(1, rsi_curr, rsi_prev))
       return;
 
-   if(g_setup_phase == PHASE_IDLE || g_setup_phase == PHASE_WAIT_RSI_ARM)
+   if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
+      g_rsi_seen_below_lower = true;
+   else if(rsi_curr < InpRsiLower || rsi_prev < InpRsiLower)
+      g_rsi_seen_below_lower = true;
+
+   if(g_rsi_seen_below_lower)
      {
-      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
-        {
-         g_rsi_armed   = true;
+      g_rsi_armed = true;
+      if(g_setup_phase == PHASE_IDLE)
          g_setup_phase = PHASE_WAIT_RSI_ARM;
-        }
      }
 
-   if(g_setup_phase == PHASE_WAIT_RSI_ARM && g_rsi_armed)
-     {
-      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
-         BeginWaitEmaPhase();
-     }
+   if(g_rsi_seen_below_lower && g_setup_phase != PHASE_WAIT_EMA && rsi_curr > InpRsiUpper)
+      BeginWaitEmaPhase();
   }
 
 //+------------------------------------------------------------------+
