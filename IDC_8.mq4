@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.09"
+#property version   "3.10"
 #property strict
 
 enum ENUM_CYCLE
@@ -41,10 +41,10 @@ input int InpEmaGraceBars    = 3;
 //--- Range filters (chop block)
 input bool InpUseEmaSepFilter    = true;  // 9-50 EMA separation filter
 input int  InpMinEmaSepPts       = 100;   // Min |9EMA-50EMA| (points)
-input bool   InpUseEmaAngleFilter = true;  // EMA34 angle filter
-input int    InpAngleEmaPeriod    = 34;    // Angle EMA period
-input int    InpAngleLookback     = 7;     // Angle lookback bars
-input double InpMinAngleDeg       = 78.7;  // Min |EMA angle| (degrees, chart-visual)
+input bool   InpUseEmaAngleFilter = true;  // EMA34 slope filter
+input int    InpAngleEmaPeriod    = 34;    // Slope EMA period
+input int    InpAngleLookback     = 7;     // Slope lookback bars
+input double InpMinAngleDeg       = 1.0;   // Min |EMA slope| vs ATR (ratio, 1.0=1xATR)
 
 //--- Risk / exit
 input double InpLots             = 0.01;
@@ -471,37 +471,29 @@ bool PassesEmaSeparationFilter()
   }
 
 //+------------------------------------------------------------------+
-//| Chart-visual EMA angle (MT4 MA Angle standard, degrees)          |
-//| angle = atan( rise / (lookback * point) ) * 180/pi               |
-//| rise  = EMA[base_shift] - EMA[base_shift + lookback]             |
+//| EMA slope normalized by ATR (flat chop ~0, strong trend |s|>1)    |
+//| slope_atr = (EMA[shift] - EMA[shift+lookback]) / ATR(lookback)   |
 //+------------------------------------------------------------------+
-bool GetEmaVisualAngleDeg(const int ema_period,
-                          const int lookback,
-                          const int base_shift,
-                          double &angle_deg)
+bool GetEmaSlopeAtrRatio(const int ema_period,
+                         const int lookback,
+                         const int base_shift,
+                         double &slope_atr)
   {
    if(lookback < 1)
       return false;
 
-   double point = TradePoint();
-   if(point <= 0.0)
-      return false;
-
    double ema_now  = 0.0;
    double ema_prev = 0.0;
-   int    shift_prev = base_shift + lookback;
-
    if(!GetEmaAtShift(ema_period, base_shift, ema_now))
       return false;
-   if(!GetEmaAtShift(ema_period, shift_prev, ema_prev))
+   if(!GetEmaAtShift(ema_period, base_shift + lookback, ema_prev))
       return false;
 
-   double rise = ema_now - ema_prev;
-   double run  = (double)lookback * point;
-   if(run <= 0.0)
+   double atr = iATR(TradeSymbol(), Period(), lookback, base_shift);
+   if(atr <= 0.0)
       return false;
 
-   angle_deg = MathArctan(rise / run) * 180.0 / 3.14159265358979323846;
+   slope_atr = (ema_now - ema_prev) / atr;
    return true;
   }
 
@@ -515,15 +507,15 @@ bool PassesEmaAngleFilter(const int order_type)
    if(InpAngleLookback < 1)
       return true;
 
-   double angle_deg = 0.0;
-   if(!GetEmaVisualAngleDeg(InpAngleEmaPeriod, InpAngleLookback, 1, angle_deg))
+   double slope_atr = 0.0;
+   if(!GetEmaSlopeAtrRatio(InpAngleEmaPeriod, InpAngleLookback, 1, slope_atr))
       return false;
 
    if(order_type == OP_SELL)
-      return (angle_deg <= -InpMinAngleDeg);
+      return (slope_atr <= -InpMinAngleDeg);
 
    if(order_type == OP_BUY)
-      return (angle_deg >= InpMinAngleDeg);
+      return (slope_atr >= InpMinAngleDeg);
 
    return false;
   }
@@ -1090,6 +1082,7 @@ bool OpenPositionAtSetupClose(const int order_type)
      }
 
    g_entry_taken = true;
+   LogEntryDone(order_type, ticket);
 
    if(OrderSelect(ticket, SELECT_BY_TICKET))
      {
@@ -1229,10 +1222,10 @@ void LogBarFilterStatus()
    bool rng_pass  = false;
    int  order_type = -1;
 
-   double sep_pts  = 0.0;
-   double angle_deg = 0.0;
-   bool   sep_data = GetEmaSeparationPts(sep_pts);
-   bool   ang_data = GetEmaVisualAngleDeg(InpAngleEmaPeriod, InpAngleLookback, 1, angle_deg);
+   double sep_pts   = 0.0;
+   double slope_atr = 0.0;
+   bool   sep_data  = GetEmaSeparationPts(sep_pts);
+   bool   ang_data  = GetEmaSlopeAtrRatio(InpAngleEmaPeriod, InpAngleLookback, 1, slope_atr);
 
    if(g_cycle == CYCLE_SELL)
      {
@@ -1300,9 +1293,11 @@ void LogBarFilterStatus()
       if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
          ang_line = "Ang=SKIP";
       else if(g_cycle == CYCLE_SELL)
-         ang_line = StringFormat("Ang=%s(%.1f<=-%.1f)", Ox(ang_pass && ang_data), angle_deg, InpMinAngleDeg);
+         ang_line = StringFormat("SlopeATR=%s(%.2f<=-%.2f)",
+                                 Ox(ang_pass && ang_data), slope_atr, InpMinAngleDeg);
       else
-         ang_line = StringFormat("Ang=%s(%.1f>=%.1f)", Ox(ang_pass && ang_data), angle_deg, InpMinAngleDeg);
+         ang_line = StringFormat("SlopeATR=%s(%.2f>=%.2f)",
+                                 Ox(ang_pass && ang_data), slope_atr, InpMinAngleDeg);
      }
 
    Print("IDC_8|BAR|", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
@@ -1321,6 +1316,20 @@ void LogBarFilterStatus()
   }
 
 //+------------------------------------------------------------------+
+void LogEntryDone(const int order_type, const int ticket)
+  {
+   if(!InpDebugBarLog)
+      return;
+
+   datetime bar_time = iTime(TradeSymbol(), Period(), 1);
+   string   side     = (order_type == OP_BUY) ? "BUY" : "SELL";
+
+   Print("IDC_8|ENTRY|DONE|", side,
+         "|bar=", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
+         "|ticket=", ticket);
+  }
+
+//+------------------------------------------------------------------+
 void ProcessSetupLogicOnNewBar()
   {
    if(g_cycle == CYCLE_NONE || g_entry_taken)
@@ -1335,11 +1344,13 @@ void ProcessSetupLogicOnNewBar()
    if(g_cycle == CYCLE_SELL)
      {
       ProcessSellRsiOnClosedBar();
+      LogBarFilterStatus();
       TrySellEntryOnClosedBar();
      }
    else if(g_cycle == CYCLE_BUY)
      {
       ProcessBuyRsiOnClosedBar();
+      LogBarFilterStatus();
       TryBuyEntryOnClosedBar();
      }
   }
@@ -1351,12 +1362,16 @@ void ProcessEntryLogicOnNewBar()
 
    if(HasOpenPosition())
      {
-      LogBarFilterStatus();
+      if(InpDebugBarLog)
+         Print("IDC_8|BAR|", TimeToString(iTime(TradeSymbol(), Period(), 1), TIME_DATE | TIME_MINUTES),
+               "|SKIP|open position exists");
       return;
      }
 
    ProcessSetupLogicOnNewBar();
-   LogBarFilterStatus();
+
+   if(g_cycle == CYCLE_NONE && InpDebugBarLog)
+      LogBarFilterStatus();
   }
 
 //+------------------------------------------------------------------+
@@ -1493,12 +1508,12 @@ bool ValidateInputs()
      }
    if(InpMinAngleDeg < 0.0)
      {
-      Print("IDC_8: min EMA angle degrees must be >= 0");
+      Print("IDC_8: min EMA slope ATR ratio must be >= 0");
       return false;
      }
-   if(InpMinAngleDeg >= 90.0)
+   if(InpMinAngleDeg > 20.0)
      {
-      Print("IDC_8: min EMA angle degrees must be < 90");
+      Print("IDC_8: min EMA slope ATR ratio should be <= 20 (v3.10 uses ATR ratio, default 1.0)");
       return false;
      }
    if(InpLots <= 0.0)
@@ -1542,13 +1557,18 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.09 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.10 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
          " | offset=", BrokerOffsetLabel(),
          " | stop level pts=", DoubleToString(GetStopLevelPts(), 0),
          " | freeze level pts=", DoubleToString(GetFreezeLevelPts(), 0));
+
+   if(InpUseEmaAngleFilter && InpMinAngleDeg > 5.0)
+      Print("IDC_8: NOTE v3.10 InpMinAngleDeg is ATR slope ratio (default 1.0). ",
+            "Current=", DoubleToString(InpMinAngleDeg, 1),
+            " may block most entries. Old degree values (e.g. 55, 78.7) are invalid.");
 
    g_last_bar_time = iTime(TradeSymbol(), Period(), 0);
    ResetCycleState();

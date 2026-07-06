@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.09
+## 원본 전략 자료 (Official Strategy Document) v3.10
 
 | 항목 | 내용 |
 |------|------|
@@ -98,8 +98,8 @@
 
 ---
 
-*EA 파일: `IDC_8.mq4` v3.09*  
-*검증 보고: `IDC_8_VERIFICATION_REPORT_v3.09.md`*
+*EA 파일: `IDC_8.mq4` v3.10*  
+*검증 보고: `IDC_8_VERIFICATION_REPORT_v3.10.md`*
 
 ---
 
@@ -112,18 +112,23 @@
 | `InpUseEmaSepFilter` | true | 9-50 EMA 이격 필터 on/off |
 | `InpMinEmaSepPts` | 100 | \|9EMA−50EMA\| 최소 (pt) |
 
-### 8.2 EMA34 시각 각도 (v3.04 — 도 단위)
+### 8.2 EMA34 기울기 — ATR 정규화 (v3.10)
 
 ```
-각도(°) = atan( (EMA[1] − EMA[1+N]) / (N × Point) ) × 180 / π
+slope_atr = (EMA34[1] − EMA34[1+N]) / ATR(N)[1]
 ```
 
 | 파라미터 | 디폴트 | 설명 |
 |----------|--------|------|
-| `InpUseEmaAngleFilter` | true | EMA34 각도 필터 on/off |
-| `InpAngleEmaPeriod` | 34 | 각도 측정 EMA |
-| `InpAngleLookback` | 7 | lookback N (봉) |
-| `InpMinAngleDeg` | **78.7** | 최소 \|각도\| (도) |
+| `InpUseEmaAngleFilter` | true | EMA34 기울기 필터 on/off |
+| `InpAngleEmaPeriod` | 34 | 기울기 측정 EMA |
+| `InpAngleLookback` | 7 | lookback N (봉) = ATR 기간 |
+| `InpMinAngleDeg` | **1.0** | 최소 \|slope_atr\| (1.0 = 7봉 동안 EMA가 ATR 1배 이상 이동) |
+
+- **횡보:** slope_atr ≈ 0 → 차단
+- **SELL:** slope_atr ≤ −`InpMinAngleDeg`
+- **BUY:** slope_atr ≥ +`InpMinAngleDeg`
+- v3.09 이전 도(degree) 공식 **폐기** (금 M1에서 차트와 불일치)
 
 ### 8.3 RSI→EMA 유예
 
