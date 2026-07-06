@@ -2,7 +2,7 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "2.00"
+#property version   "2.01"
 #property description "GOLD M1 structure false-breakout pinbar strategy (original 1:1)"
 
 //--- §9 원본 입력 파라미터 (12개, 유령 파라미터 없음)
@@ -353,17 +353,24 @@ bool OpenTrade(int orderType)
    if(orderType == OP_BUY)
    {
       openPrice = Ask;
-      stopLoss = NormalizeDouble(openPrice - StopLossPoints * Point, Digits);
+      stopLoss = NormalizeStopPrice(openPrice - StopLossPoints * Point);
       arrowColor = clrLime;
    }
    else if(orderType == OP_SELL)
    {
       openPrice = Bid;
-      stopLoss = NormalizeDouble(openPrice + StopLossPoints * Point, Digits);
+      stopLoss = NormalizeStopPrice(openPrice + StopLossPoints * Point);
       arrowColor = clrRed;
    }
    else
       return(false);
+
+   if(!IsStopLossBrokerValid(orderType, stopLoss))
+   {
+      Print(EA_NAME, ": OpenTrade blocked. Initial SL violates broker stop level. type=",
+            OrderTypeName(orderType), " sl=", DoubleToString(stopLoss, Digits));
+      return(false);
+   }
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, volume, openPrice, SlippagePoints,
@@ -417,6 +424,135 @@ int CountOpenPositions()
    return(count);
 }
 
+int GetBrokerStopLevelPoints()
+{
+   int stopLevel = (int)MarketInfo(Symbol(), MODE_STOPLEVEL);
+   if(stopLevel < 0)
+      stopLevel = 0;
+   return(stopLevel);
+}
+
+int GetBrokerFreezeLevelPoints()
+{
+   int freezeLevel = (int)MarketInfo(Symbol(), MODE_FREEZELEVEL);
+   if(freezeLevel < 0)
+      freezeLevel = 0;
+   return(freezeLevel);
+}
+
+double NormalizeStopPrice(double price)
+{
+   double tickSize = MarketInfo(Symbol(), MODE_TICKSIZE);
+   if(tickSize <= 0.0)
+      return(NormalizeDouble(price, Digits));
+
+   return(NormalizeDouble(MathRound(price / tickSize) * tickSize, Digits));
+}
+
+bool IsStopLossBrokerValid(int orderType, double stopLoss)
+{
+   if(stopLoss <= 0.0)
+      return(false);
+
+   double minDistance = GetBrokerStopLevelPoints() * Point;
+
+   if(orderType == OP_BUY)
+   {
+      if(stopLoss >= Bid - minDistance)
+         return(false);
+   }
+   else if(orderType == OP_SELL)
+   {
+      if(stopLoss <= Ask + minDistance)
+         return(false);
+   }
+   else
+      return(false);
+
+   return(true);
+}
+
+bool CanModifyStopLoss(int orderType, double newStopLoss)
+{
+   if(!IsStopLossBrokerValid(orderType, newStopLoss))
+      return(false);
+
+   int freezeLevel = GetBrokerFreezeLevelPoints();
+   if(freezeLevel <= 0 || OrderStopLoss() <= 0.0)
+      return(true);
+
+   double freezeDistance = freezeLevel * Point;
+
+   if(orderType == OP_BUY)
+   {
+      if(Bid - OrderStopLoss() <= freezeDistance)
+         return(false);
+   }
+   else if(orderType == OP_SELL)
+   {
+      if(OrderStopLoss() - Ask <= freezeDistance)
+         return(false);
+   }
+
+   return(true);
+}
+
+double ApplyBrokerStopRules(int orderType, double formulaStopLoss)
+{
+   double normalizedStop = NormalizeStopPrice(formulaStopLoss);
+   double minDistance = GetBrokerStopLevelPoints() * Point;
+
+   if(orderType == OP_BUY)
+   {
+      double brokerMaxStop = NormalizeStopPrice(Bid - minDistance);
+      if(normalizedStop > brokerMaxStop)
+         normalizedStop = brokerMaxStop;
+   }
+   else if(orderType == OP_SELL)
+   {
+      double brokerMinStop = NormalizeStopPrice(Ask + minDistance);
+      if(normalizedStop < brokerMinStop)
+         normalizedStop = brokerMinStop;
+   }
+
+   return(normalizedStop);
+}
+
+bool ShouldTightenStopLoss(int orderType, double newStopLoss)
+{
+   if(OrderStopLoss() <= 0.0)
+      return(true);
+
+   if(orderType == OP_BUY)
+      return(newStopLoss > OrderStopLoss() + Point * 0.5);
+
+   if(orderType == OP_SELL)
+      return(newStopLoss < OrderStopLoss() - Point * 0.5);
+
+   return(false);
+}
+
+bool ModifyStopLoss(int orderType, double newStopLoss, color modifyColor)
+{
+   if(!ShouldTightenStopLoss(orderType, newStopLoss))
+      return(true);
+
+   if(!CanModifyStopLoss(orderType, newStopLoss))
+      return(true);
+
+   ResetLastError();
+   if(OrderModify(OrderTicket(), OrderOpenPrice(), newStopLoss, 0.0, 0, modifyColor))
+      return(true);
+
+   int errorCode = GetLastError();
+   if(errorCode == 130)
+      return(true);
+
+   Print(EA_NAME, ": ", OrderTypeName(orderType),
+         " trailing OrderModify failed. ticket=", OrderTicket(), " error=", errorCode);
+   return(false);
+}
+
 //+------------------------------------------------------------------+
 //| §8 — 트레일링 스탑 (2번 방식)                                      |
 //+------------------------------------------------------------------+
@@ -451,14 +587,10 @@ void TrailBuyOrder()
    double lockedPoints = TrailingStartPoints +
                          MathFloor((profitPoints - TrailingStartPoints) / TrailingStepPoints) *
                          TrailingStepPoints;
-   double newStopLoss = NormalizeDouble(OrderOpenPrice() + lockedPoints * Point, Digits);
+   double formulaStopLoss = OrderOpenPrice() + lockedPoints * Point;
+   double newStopLoss = ApplyBrokerStopRules(OP_BUY, formulaStopLoss);
 
-   if(OrderStopLoss() != 0.0 && newStopLoss <= OrderStopLoss() + Point * 0.5)
-      return;
-
-   ResetLastError();
-   if(!OrderModify(OrderTicket(), OrderOpenPrice(), newStopLoss, 0.0, 0, clrLime))
-      Print(EA_NAME, ": BUY trailing OrderModify failed. ticket=", OrderTicket(), " error=", GetLastError());
+   ModifyStopLoss(OP_BUY, newStopLoss, clrLime);
 }
 
 //+------------------------------------------------------------------+
@@ -473,14 +605,10 @@ void TrailSellOrder()
    double lockedPoints = TrailingStartPoints +
                          MathFloor((profitPoints - TrailingStartPoints) / TrailingStepPoints) *
                          TrailingStepPoints;
-   double newStopLoss = NormalizeDouble(OrderOpenPrice() - lockedPoints * Point, Digits);
+   double formulaStopLoss = OrderOpenPrice() - lockedPoints * Point;
+   double newStopLoss = ApplyBrokerStopRules(OP_SELL, formulaStopLoss);
 
-   if(OrderStopLoss() != 0.0 && newStopLoss >= OrderStopLoss() - Point * 0.5)
-      return;
-
-   ResetLastError();
-   if(!OrderModify(OrderTicket(), OrderOpenPrice(), newStopLoss, 0.0, 0, clrRed))
-      Print(EA_NAME, ": SELL trailing OrderModify failed. ticket=", OrderTicket(), " error=", GetLastError());
+   ModifyStopLoss(OP_SELL, newStopLoss, clrRed);
 }
 
 string OrderTypeName(int orderType)
