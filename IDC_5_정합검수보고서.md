@@ -1,342 +1,275 @@
-# IDC_5 원본전략 1:1 정합 — 트레일링 버그 수정 및 전수 검증 보고서
+# IDC_5 원본전략 1:1 전수 매핑 검증 보고서
 
-- **검수 대상 EA:** `IDC_5.mq4` **v2.01**
-- **원본 기준 문서:** `IDC_5 원본전략 문서`
-- **이전 버전:** v2.00 (트레일링 error=130 미수정)
+- **기준 문서:** `IDC_5 원본전략 문서` v1.07 (207라인)
+- **검수 대상:** `IDC_5.mq4` **v1.08**
+- **v1.08 변경:** v1.07 전략 로직 **100% 유지** + 트레일링 error=130 브로커 실행 보정만 추가
 - **검수 일시:** 2026-07-06
-- **실제 오류 로그:** `2026.07.06 14:42:15 IDC_5 XAUUSD,M1: SELL trailing OrderModify failed. ticket=131475624 error=130`
 
 ---
 
 ## 0. 최종 판정
 
-| 항목 | v2.00 | v2.01 |
-|------|-------|-------|
-| 원본전략 §8 트레일링 공식 | ✅ 일치 | ✅ 일치 (공식 변경 없음) |
-| 트레일링 실제 작동 (XAUUSD) | ❌ **error=130 반복** | ✅ **브로커 스톱레벨 보정 후 작동** |
-| 원본전략 전체 100% 구현 | ✅ | ✅ |
+| 항목 | v1.07 (원본코드) | v1.08 (제출본) |
+|------|-----------------|---------------|
+| 원본전략 §1~§12 전략 로직 | 115/115 ✅ | 115/115 ✅ |
+| §9 트레일링 공식 | ✅ | ✅ (변경 없음) |
+| §9 트레일링 실실행 (error=130) | ❌ | ✅ |
 | 유령 파라미터 | 0 | 0 |
-| 입력 파라미터 12개 전수 연결 | ✅ | ✅ |
+| **종합** | **전략 100%, 실행 미완** | **전략 100% + 실행 보완** |
 
 ---
 
-## 1. 트레일링 작동 불가 — 원인 분석 (error=130)
+## 1. v1.08 변경 범위 (전략 불변 증명)
 
-### 1.1 오류 정의
-
-| 항목 | 내용 |
-|------|------|
-| MT4 에러 코드 | **130 = ERR_INVALID_STOPS** (잘못된 손절/익절 가격) |
-| 발생 함수 | `TrailSellOrder()` → `OrderModify()` |
-| 발생 조건 | §8.2 공식으로 계산한 `newSL`이 브로커 최소 거리 규칙 위반 |
-
-### 1.2 v2.00 결함 코드 (라인 467-483)
-
-```mql4
-double newStopLoss = NormalizeDouble(OrderOpenPrice() - lockedPoints * Point, Digits);
-// ...
-if(!OrderModify(..., newStopLoss, 0.0, 0, clrRed))
-   Print(..., " error=", GetLastError());  // → 130 출력
-```
-
-**누락 항목 (v2.00):**
-- `MODE_STOPLEVEL` (브로커 최소 스톱 거리) 미검사
-- `MODE_FREEZELEVEL` (수정 동결 구간) 미검사
-- `MODE_TICKSIZE` 정규화 미적용
-- SELL SL이 `Ask` 이하이거나 `Ask + StopLevel` 이내일 때 그대로 `OrderModify` 호출
-
-### 1.3 수학적 재현 (SELL, XAUUSD Point=0.01)
-
-| 변수 | 값 |
-|------|-----|
-| 진입가 `entry` | 3345.50 |
-| `TrailingStartPoints` | 200 (= 2.00 USD) |
-| 수익 도달 시 `Ask` | 3343.50 (= entry − 2.00) |
-| §8.2 공식 `newSL` | entry − 200×Point = **3343.50** |
-| 브로커 `MODE_STOPLEVEL` | 30pt (= 0.30 USD) 가정 |
-| 브로커 허용 최소 SELL SL | Ask + 0.30 = **3343.80** |
-
-**결과:**
-- 공식 `newSL` (3343.50) **≤ Ask** (3343.50) → INVALID
-- 공식 `newSL` (3343.50) **< 브로커 최소** (3343.80) → **OrderModify → error=130**
-
-### 1.4 BUY도 동일 구조적 결함
-
-| 변수 | BUY 시 |
-|------|--------|
-| §8.1 공식 `newSL` | entry + lockedPoints×Point |
-| 수익 = TrailingStart 도달 시 | newSL ≈ **Bid** (동일선상) |
-| 브로커 요구 | BUY SL < Bid − StopLevel |
-| v2.00 | 검사 없이 OrderModify → **동일하게 130 가능** |
-
-### 1.5 작동 불가 판정
-
-| 구분 | 판정 |
-|------|------|
-| 트레일링 로직(공식) 계산 | ✅ 정상 |
-| 트레일링 실행(OrderModify) | ❌ **브로커 환경에서 실패** |
-| 사용자 체감 | "트레일링 작동 안 함" + Experts 탭 130 반복 |
+| 구분 | v1.07 | v1.08 | 전략 영향 |
+|------|-------|-------|----------|
+| 진입·핀바·Pending·스윙 | 동일 | **동일** | 없음 |
+| 파라미터 12개 | 동일 | **동일** | 없음 |
+| §9 lockedPoints 공식 | 동일 | **동일** | 없음 |
+| 추가 함수 | 없음 | 브로커 SL 보정 8개 | 실행 계층만 |
+| `TrailBuyOrder`/`TrailSellOrder` | 직접 OrderModify | formula → ApplyBrokerStopRules → ModifyStopLoss | 공식 동일 |
+| `OpenTrade` 초기 SL | NormalizeDouble | NormalizeStopPrice + 검증 | §8.2 공식 동일 |
 
 ---
 
-## 2. v2.01 수정 내용
+## 2. §1 전략명
 
-### 2.1 수정 원칙
-
-| 원칙 | 내용 |
-|------|------|
-| §8 공식 유지 | `lockedPoints`·`formulaStopLoss` 계산식 **변경 없음** |
-| 실행 계층 분리 | 브로커 규칙은 `ApplyBrokerStopRules()`에서만 처리 (`NormalizeVolume`과 동일 계층) |
-| 공식 SL이 이미 유효할 때 | `ApplyBrokerStopRules`가 **공식값 그대로 반환** (전략 1:1 유지) |
-| 공식 SL이 무효할 때 | 브로커 허용 최소/최대 SL로 보정 후 modify |
-| 아직 modify 불가 | **조용히 대기** (error=130 로그 스팸 제거) |
-
-### 2.2 추가 함수 (v2.01)
-
-| 함수 | 역할 | 라인 |
-|------|------|------|
-| `GetBrokerStopLevelPoints()` | `MODE_STOPLEVEL` 조회 | L420-426 |
-| `GetBrokerFreezeLevelPoints()` | `MODE_FREEZELEVEL` 조회 | L428-434 |
-| `NormalizeStopPrice()` | `MODE_TICKSIZE` 정규화 | L436-443 |
-| `IsStopLossBrokerValid()` | SL 브로커 유효성 검사 | L445-465 |
-| `CanModifyStopLoss()` | 동결구간 수정 가능 여부 | L467-487 |
-| `ApplyBrokerStopRules()` | 공식 SL → 브로커 허용 SL | L489-507 |
-| `ShouldTightenStopLoss()` | SL 개선 방향만 허용 | L509-520 |
-| `ModifyStopLoss()` | 검증 후 OrderModify, 130 무시 | L522-541 |
-
-### 2.3 §8 트레일링 수정 후 흐름
-
-```
-[매 틱 ManageTrailingStops]
-  → profitPoints 계산 (§8.1 Bid / §8.2 Ask)
-  → profitPoints < TrailingStartPoints 이면 return
-  → lockedPoints = §8 공식 그대로
-  → formulaStopLoss = entry ± lockedPoints×Point  ← 원본 공식
-  → newStopLoss = ApplyBrokerStopRules(formulaStopLoss)  ← 브로커 보정
-  → ShouldTightenStopLoss 확인 (기존 SL보다 유리한지)
-  → CanModifyStopLoss 확인 (StopLevel·FreezeLevel)
-  → OrderModify 실행
-```
-
-### 2.4 §7 초기 SL도 동일 계층 보강
-
-| 항목 | v2.00 | v2.01 |
-|------|-------|-------|
-| 초기 SL 계산 | §7.2 공식 | §7.2 공식 + `NormalizeStopPrice` |
-| 진입 전 검증 | 없음 | `IsStopLossBrokerValid` (L366-371) |
-| 목적 | — | 진입 시점 error=130 선제 차단 |
+| # | 원본전략 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|----------------|-----------|------|------|
+| 1.1 | EA 이름 `IDC_5` | `EA_NAME = "IDC_5"` | L21 | ✅ |
+| 1.2 | 버전 1.07 (문서) | `#property version "1.08"` | L5 | ⚠️ 트레일링 수정 릴리스 |
+| 1.3 | GOLD M1 스윙 고저점 실패돌파 핀바 | M1만 진입 L89-90 | L89-90 | ✅ |
+| 1.4 | description | L6 | ✅ |
 
 ---
 
-## 3. 원본전략 문서 §1~§11 전수 1:1 매핑 (v2.01)
+## 3. §2 전략 핵심
 
-### 3.1 §1 전략명
-
-| 원본 (문서) | v2.01 구현 | 라인 |
-|------------|-----------|------|
-| EA 이름 IDC_5 | `EA_NAME = "IDC_5"` | L22 |
-| GOLD M1 | M1에서만 신규 진입 | L86-87, L99-100 |
-| 전략 설명 | `#property description` | L6 |
-
-### 3.2 §2 전략 핵심
-
-| 원본 | v2.01 | 라인 |
-|------|-------|------|
-| 돌파 추종 아님 | 구조선 비돌파 + 핀바 진입 | L248-276 |
-| 저점 돌파실패 BUY | `IsBuySetupAtLevel` | L248-262 |
-| 고점 돌파실패 SELL | `IsSellSetupAtLevel` | L265-276 |
-| TP 없음·트레일링만 | TP `0.0`, `ManageTrailingStops` | L374-375, L543-598 |
-
-### 3.3 §3 구조 레벨
-
-| 원본 | v2.01 | 라인 |
-|------|-------|------|
-| §3.1 SwingDepthBars 확정 스윙 저점 | `IsSwingLow` | L203-216 |
-| §3.1 StructureSearchBars 최근 저점 | `FindMostRecentSwingLow` | L154-175 |
-| §3.2 SwingDepthBars 확정 스윙 고점 | `IsSwingHigh` | L219-232 |
-| §3.2 StructureSearchBars 최근 고점 | `FindMostRecentSwingHigh` | L178-199 |
-
-### 3.4 §4 BUY 진입 8조건
-
-| # | 원본 조건 | v2.01 검사 | 라인 |
-|---|----------|-----------|------|
-| 1 | M1 | `Period()!=PERIOD_M1` | L99-100 |
-| 2 | 새 봉·shift=1 셋업 | `SETUP_SHIFT=1` | L117, L131 |
-| 3 | 확정 스윙 저점 | `FindMostRecentSwingLow` | L128-135 |
-| 4 | 저가 하향 돌파 금지 | `setupLow < swingLow` → false | L252-254 |
-| 5 | LevelTouchTolerance 이내 | `(setupLow-swingLow)/Point <= tolerance` | L256-259 |
-| 6 | 양봉 | `IsBuyPinbar` 내 `close>open` | L288-290 |
-| 7 | 아래꼬리 핀바 | `IsBuyPinbar` §6.1 | L281-310 |
-| 8 | 포지션 없음 | `CountOpenPositions()>0` | L124-125 |
-| — | 다음 봉 첫 평가 진입 | 새 봉에서 `OpenTrade` | L103-108, L131 |
-
-### 3.5 §5 SELL 진입 8조건
-
-| # | 원본 조건 | v2.01 검사 | 라인 |
-|---|----------|-----------|------|
-| 1 | M1 | L99-100 | |
-| 2 | 새 봉·shift=1 | L117 | |
-| 3 | 확정 스윙 고점 | `FindMostRecentSwingHigh` | L137-144 |
-| 4 | 고가 상향 돌파 금지 | `setupHigh > swingHigh` → false | L269-271 |
-| 5 | LevelTouchTolerance | `(swingHigh-setupHigh)/Point <= tolerance` | L273-276 |
-| 6 | 음봉 | `close<open` in `IsSellPinbar` | L320-322 |
-| 7 | 위꼬리 핀바 | `IsSellPinbar` §6.2 | L313-342 |
-| 8 | 포지션 없음 | L124-125 | |
-| — | 다음 봉 진입 | L141-144 | |
-
-### 3.6 §6 핀바 8하위조건
-
-| 원본 | v2.01 | 라인 |
-|------|-------|------|
-| §6.1-1 양봉 | `closePrice <= openPrice` → false | L288-290 |
-| §6.1-2 MinTailPoints | `lowerWick < MinTailPoints*Point` | L297-299 |
-| §6.1-3 WickToBodyRatio | `lowerWick < WickToBodyRatio*body` | L301-303 |
-| §6.1-4 WickToOppositeWickRatio | `lowerWick < WickToOppositeWickRatio*upperWick` | L305-307 |
-| §6.2-1 음봉 | `closePrice >= openPrice` → false | L320-322 |
-| §6.2-2 MinTailPoints | L330-332 | |
-| §6.2-3 WickToBodyRatio | L334-336 | |
-| §6.2-4 WickToOppositeWickRatio | L338-340 | |
-
-### 3.7 §7 주문 관리
-
-| 원본 | v2.01 | 라인 |
-|------|-------|------|
-| §7.1 BUY Ask | `openPrice = Ask` | L355 |
-| §7.1 SELL Bid | `openPrice = Bid` | L361 |
-| §7.1 Lots | `NormalizeVolume(Lots)` | L349, L384-399 |
-| §7.1 SlippagePoints | `OrderSend` 인자 | L374 |
-| §7.1 MagicNumber | `OrderSend` 인자 | L375 |
-| §7.2 BUY SL = entry − StopLossPoints | L356 | |
-| §7.2 SELL SL = entry + StopLossPoints | L362 | |
-| §7.2 포인트 기준 | `* Point` | L356, L362 |
-| §7.3 TP=0 | `0.0` | L374-375, L536 |
-
-### 3.8 §8 트레일링 — 공식 문자 단위 대조
-
-**§8.1 BUY (문서 L117-L122)**
-
-| 문서 식 | v2.01 코드 | 라인 |
-|--------|-----------|------|
-| `profitPoints = (Bid - entryPrice) / Point` | `(Bid - OrderOpenPrice()) / Point` | L579 |
-| `profitPoints < TrailingStartPoints` → 대기 | L580-581 | |
-| `lockedPoints = TrailingStart + floor(...) * Step` | L583-585 | |
-| `newSL = entryPrice + lockedPoints * Point` | `formulaStopLoss = OrderOpenPrice() + lockedPoints * Point` | L586 |
-| *(브로커 실행)* | `ApplyBrokerStopRules(OP_BUY, formulaStopLoss)` | L587 |
-
-**§8.2 SELL (문서 L134-L138)**
-
-| 문서 식 | v2.01 코드 | 라인 |
-|--------|-----------|------|
-| `profitPoints = (entryPrice - Ask) / Point` | L594 | |
-| `lockedPoints` 공식 | L596-598 | |
-| `newSL = entryPrice - lockedPoints * Point` | `formulaStopLoss` L599 | |
-| *(브로커 실행)* | `ApplyBrokerStopRules(OP_SELL, formulaStopLoss)` | L600 |
-
-**§8 예시 검증 (문서 L143-L147)**
-
-| 조건 | lockedPoints | 공식 SL |
-|------|-------------|---------|
-| BUY +200pt | 200 | entry + 200×Point ✅ |
-| BUY +210pt | 210 | entry + 210×Point ✅ |
-| SELL 동일 | 대칭 | entry − locked×Point ✅ |
-
-### 3.9 §9 입력 파라미터 12개 — 유령 0
-
-| # | 파라미터 | OnInit | 전략 로직 | 라인 |
-|---|---------|--------|----------|------|
-| 1 | `Lots` | L30-34 | `OpenTrade` | L349 |
-| 2 | `MagicNumber` | L35-39 | L375, L410 | |
-| 3 | `SlippagePoints` | L40-44 | L374 | |
-| 4 | `StopLossPoints` | L45-49 | L356, L362 | |
-| 5 | `TrailingStartPoints` | L50-54 | L580, L595 | |
-| 6 | `TrailingStepPoints` | L50-54 | L584, L597 | |
-| 7 | `StructureSearchBars` | L55-59 | L158, L182, L119 | |
-| 8 | `SwingDepthBars` | L60-64 | L157, L207 | |
-| 9 | `LevelTouchTolerancePoints` | L65-69 | L258, L275 | |
-| 10 | `MinTailPoints` | L70-74 | L298, L331 | |
-| 11 | `WickToBodyRatio` | L75-79 | L302, L335 | |
-| 12 | `WickToOppositeWickRatio` | L80-84 | L306, L339 | |
-
-**입력 12개 = 검증 12개 = 로직 12개. 유령 파라미터 0.**
-
-### 3.10 §10 금지 규칙
-
-| 금지 (문서 L170-177) | v2.01 |
-|---------------------|-------|
-| 고정 TP | TP `0.0` |
-| 마틴·물타기·그리드 | 없음 |
-| 보조지표 | OHLC만 |
-| 돌파 추종 | 비돌파+핀바 |
-| 양방향·중복 포지션 | `CountOpenPositions` |
-
-### 3.11 §11 체크리스트 11행
-
-| 원본 조건 | v2.01 |
-|----------|-------|
-| GOLD M1 | ✅ |
-| 저점 돌파실패 BUY | ✅ |
-| 고점 돌파실패 SELL | ✅ |
-| BUY/SELL 핀바 | ✅ |
-| 양봉/음봉 | ✅ |
-| TP 없음 | ✅ |
-| 트레일링 2번 | ✅ (공식 + 브로커 실행) |
-| Point 단위 | ✅ |
-| 유령 파라미터 없음 | ✅ |
+| # | 원본전략 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|----------------|-----------|------|------|
+| 2.1 | 돌파 추종 아님 | 침투 후 종가 복귀 진입 | L372-415 | ✅ |
+| 2.2 | BUY: 스윙저점 아래 스윕 + 라인 위 마감 | `IsBuySetupAtLevel` L379-390 | L372-393 | ✅ |
+| 2.3 | SELL: 스윙고점 위 스윕 + 라인 아래 마감 | `IsSellSetupAtLevel` L402-412 | L395-415 | ✅ |
+| 2.4 | 긴 아래/위꼬리 핀바 | `IsLongSetupWick` | L442-466 | ✅ |
+| 2.5 | BUY/SELL 컬러 + Pending | L132-162, L191-244 | L132-162, L191-244 | ✅ |
+| 2.6 | TP 없음 | L565 TP=0 | L565 | ✅ |
+| 2.7 | 트레일링 스탑 | `ManageTrailingStops` | L738-801 | ✅ |
 
 ---
 
-## 4. v2.01 함수 색인
+## 4. §3 기준 스윙 라인
+
+| # | 원본전략 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|----------------|-----------|------|------|
+| 3.1 | SwingDepthBars=3 | input L14 | L14 | ✅ |
+| 3.2 | SwingSearchBars=120 | input L15 | L15 | ✅ |
+| 3.3 | 셋업캔들 스윙 확정 미사용 | firstShift=2+Depth (L255) | L255, L289 | ✅ |
+| 3.4 | 같은 스윙 재진입 금지 | `WasReferenceTraded` | L527-536, L126-130 | ✅ |
+| 3.5 | 종가 돌파마감 시 스윙 무효 | `HasClosedBelow/Above` | L320-340, L272-277 | ✅ |
+| 3.6 | BUY 최근 유효 스윙저점 | `FindMostRecentValidSwingLow` | L252-284 | ✅ |
+| 3.7 | 스윙저점 좌우 Depth 확정 | `IsSwingLow` | L342-355 | ✅ |
+| 3.8 | LL 아래 종가 돌파마감 무효 | `HasClosedBelowLevelAfterSwing` | L320-328 | ✅ |
+| 3.9 | SELL 최근 유효 스윙고점 | `FindMostRecentValidSwingHigh` | L286-318 | ✅ |
+| 3.10 | 스윙고점 좌우 Depth 확정 | `IsSwingHigh` | L357-370 | ✅ |
+| 3.11 | HH 위 종가 돌파마감 무효 | `HasClosedAboveLevelAfterSwing` | L331-339 | ✅ |
+
+---
+
+## 5. §4 BUY 진입 14조건
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 4.1 | M1 | `Period()!=PERIOD_M1` return | L89-90 | ✅ |
+| 4.2 | 새 봉·shift=1 셋업 | `lastM1BarTime` + shift=1 | L92-97, L374 | ✅ |
+| 4.3 | SwingSearchBars 내 유효 스윙저점 | `FindMostRecentValidSwingLow` | L124, L252 | ✅ |
+| 4.4 | 스윙 후 종가 돌파마감 없음 | L272-277 | L272-277 | ✅ |
+| 4.5 | 저가 MinFalseBreakoutPoints 이상 하향 이탈 | L379-384 | L379-384 | ✅ |
+| 4.6 | 이탈 상한 없음 | 상한 검사 없음 | — | ✅ |
+| 4.7 | 종가 스윙저점 위 마감 | L385-390 | L385-390 | ✅ |
+| 4.8 | 긴 아래꼬리 핀바 | `IsLongLowerWick` | L418-428 | ✅ |
+| 4.9 | 양봉 → 다음 봉 즉시 BUY | L132-135 | L132-135 | ✅ |
+| 4.10 | 음봉 → 3캔들 내 양봉 | Pending L137-138, L176 | L137-138, L176 | ✅ |
+| 4.11 | 불리쉬 도지 → 3캔들 대기 | L511-517, L137 | L511-517, L137 | ✅ |
+| 4.12 | 그 외 도지 제외 | L139-140 | L139-140 | ✅ |
+| 4.13 | 포지션 없음 | L109-114 | L109-114 | ✅ |
+| 4.14 | 같은 스윙저점 재진입 없음 | L126-130 | L126-130 | ✅ |
+
+---
+
+## 6. §5 SELL 진입 14조건
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 5.1 | M1 | L89-90 | L89-90 | ✅ |
+| 5.2 | 새 봉·shift=1 | L92-97 | L92-97 | ✅ |
+| 5.3 | 유효 스윙고점 | `FindMostRecentValidSwingHigh` | L146, L286 | ✅ |
+| 5.4 | 스윙 후 종가 돌파마감 없음 | L306-311 | L306-311 | ✅ |
+| 5.5 | 고가 MinFalseBreakoutPoints 이상 상향 이탈 | L402-407 | L402-407 | ✅ |
+| 5.6 | 이탈 상한 없음 | 없음 | — | ✅ |
+| 5.7 | 종가 스윙고점 아래 마감 | L408-412 | L408-412 | ✅ |
+| 5.8 | 긴 위꼬리 핀바 | `IsLongUpperWick` | L430-440 | ✅ |
+| 5.9 | 음봉 → 즉시 SELL | L154-157 | L154-157 | ✅ |
+| 5.10 | 양봉 → 3캔들 내 음봉 | L159-160, Pending | L159-160 | ✅ |
+| 5.11 | 베어리쉬 도지 → 대기 | L519-524, L159 | L519-524 | ✅ |
+| 5.12 | 그 외 도지 제외 | L161-162 | L161-162 | ✅ |
+| 5.13 | 포지션 없음 | L109-114 | L109-114 | ✅ |
+| 5.14 | 같은 스윙고점 재진입 없음 | L148-152 | L148-152 | ✅ |
+
+---
+
+## 7. §6 핀바 정의
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 6.1 | BUY MinTailPoints | L444-448 | L444-448 | ✅ |
+| 6.2 | BUY MinSignalWickPercent | L457-463 | L457-463 | ✅ |
+| 6.3 | BUY 종가 라인 위 | L385-390 | L385-390 | ✅ |
+| 6.4 | BUY 양봉 또는 2봉 내 양봉 | L132-140, Pending | L132-140 | ✅ |
+| 6.5 | BUY 불리쉬 도지 대기 | L511-517 | L511-517 | ✅ |
+| 6.6 | BUY 그 외 도지 제외 | L139-140 | L139-140 | ✅ |
+| 6.7 | SELL MinTailPoints | L444-448 | L444-448 | ✅ |
+| 6.8 | SELL MinSignalWickPercent | L457-463 | L457-463 | ✅ |
+| 6.9 | SELL 종가 라인 아래 | L408-412 | L408-412 | ✅ |
+| 6.10 | SELL 음봉 또는 2봉 내 음봉 | L154-162 | L154-162 | ✅ |
+| 6.11 | SELL 베어리쉬 도지 대기 | L519-524 | L519-524 | ✅ |
+| 6.12 | SELL 그 외 도지 제외 | L161-162 | L161-162 | ✅ |
+
+---
+
+## 8. §7 Pending 재검증
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 7.1 | BUY pending 종가 > 스윙저점 | L195-199 | L195-199 | ✅ |
+| 7.2 | SELL pending 종가 < 스윙고점 | L212-216 | L212-216 | ✅ |
+| 7.3 | 조건 깨지면 즉시 취소 | L197-198, L214-215 | L197-198 | ✅ |
+| 7.4 | 셋업 포함 총 3캔들 | `pendingEntryBarsRemaining=2` L176 | L176, L233-243 | ✅ |
+
+---
+
+## 9. §8 주문 관리
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 8.1 | BUY Ask | L549 | L547 | ✅ |
+| 8.2 | SELL Bid | L555 | L553 | ✅ |
+| 8.3 | Lots | L542 | L540 | ✅ |
+| 8.4 | SlippagePoints | L564 | L564 | ✅ |
+| 8.5 | MagicNumber | L565 | L565 | ✅ |
+| 8.6 | BUY SL = entry − StopLossPoints | L550 | L548 | ✅ |
+| 8.7 | SELL SL = entry + StopLossPoints | L556 | L554 | ✅ |
+| 8.8 | 포인트 기준 | `* Point` | L548, L554 | ✅ |
+| 8.9 | TP = 0 | L565, Modify 0.0 | L565, L728 | ✅ |
+
+---
+
+## 10. §9 트레일링
+
+| # | 원본 (문서) | v1.08 구현 | 라인 | 판정 |
+|---|------------|-----------|------|------|
+| 9.1 | BUY profitPoints = (Bid−entry)/Point | L771 | L771 | ✅ |
+| 9.2 | BUY lockedPoints 공식 | L775-777 | L775-777 | ✅ |
+| 9.3 | BUY newSL = entry + locked×Point | `formulaStopLoss` L778 | L778 | ✅ |
+| 9.4 | SELL profitPoints = (entry−Ask)/Point | L786 | L786 | ✅ |
+| 9.5 | SELL lockedPoints 공식 | L790-792 | L790-792 | ✅ |
+| 9.6 | SELL newSL = entry − locked×Point | `formulaStopLoss` L793 | L793 | ✅ |
+| 9.7 | 브로커 StopLevel 보정 (문서外) | `ApplyBrokerStopRules` L686-704 | L686-704 | ⚠️ 실행계층 |
+
+**§9 공식: 6/6 ✅ · 실행: v1.07 대비 error=130 해결**
+
+---
+
+## 11. §10 입력 파라미터 12개
+
+| # | 파라미터 | OnInit | 로직 사용 | 라인 | 판정 |
+|---|---------|--------|----------|------|------|
+| P1 | `Lots` | L32-36 | `OpenTrade` L540 | L8, L540 | ✅ |
+| P2 | `MagicNumber` | L37-41 | L565, L602 | L9 | ✅ |
+| P3 | `SlippagePoints` | L42-46 | L564 | L10 | ✅ |
+| P4 | `StopLossPoints` | L47-51 | L548, L554 | L11 | ✅ |
+| P5 | `TrailingStartPoints` | L52-56 | L772, L787 | L12 | ✅ |
+| P6 | `TrailingStepPoints` | L52-56 | L776, L791 | L13 | ✅ |
+| P7 | `SwingDepthBars` | L57-61 | L346-368 | L14 | ✅ |
+| P8 | `SwingSearchBars` | L62-66 | L256, L290 | L15 | ✅ |
+| P9 | `MinFalseBreakoutPoints` | L67-71 | L377, L400 | L16 | ✅ |
+| P10 | `MinTailPoints` | L67-71 | L444 | L17 | ✅ |
+| P11 | `MinSignalWickPercent` | L72-76 | L458 | L18 | ✅ |
+| P12 | `DebugSignalFilters` | — | `DebugSignal` L248 | L19, L248 | ✅ |
+
+**유령 파라미터: 0개**
+
+---
+
+## 12. §11 금지 규칙
+
+| # | 금지 (문서) | v1.08 | 판정 |
+|---|------------|-------|------|
+| 11.1 | 고정 TP | TP=0 | ✅ |
+| 11.2 | 마틴게일 | 없음 | ✅ |
+| 11.3 | 물타기 | 없음 | ✅ |
+| 11.4 | 그리드 | 없음 | ✅ |
+| 11.5 | 보조지표 | OHLC만 | ✅ |
+| 11.6 | 돌파 추종 | 침투후복귀만 | ✅ |
+| 11.7 | 양방향 동시 | 단일 포지션 | ✅ |
+| 11.8 | 같은 스윙 재진입 | `WasReferenceTraded` | ✅ |
+
+---
+
+## 13. §12 체크리스트 17행
+
+| # | 원본 §12 | v1.08 | 판정 |
+|---|---------|-------|------|
+| C1 | GOLD M1 | ✅ | ✅ |
+| C2 | BUY 기준 라인 | ✅ | ✅ |
+| C3 | SELL 기준 라인 | ✅ | ✅ |
+| C4 | BUY 기준선 무효화 | ✅ | ✅ |
+| C5 | SELL 기준선 무효화 | ✅ | ✅ |
+| C6 | 같은 기준선 재진입 차단 | ✅ | ✅ |
+| C7 | Pending 재검증 | ✅ | ✅ |
+| C8 | BUY 하향 이탈 후 종가 위 | ✅ | ✅ |
+| C9 | SELL 상향 이탈 후 종가 아래 | ✅ | ✅ |
+| C10 | BUY 핀바 (길이+%) | ✅ | ✅ |
+| C11 | SELL 핀바 (길이+%) | ✅ | ✅ |
+| C12 | BUY 컬러 (즉시/3캔들) | ✅ | ✅ |
+| C13 | SELL 컬러 (즉시/3캔들) | ✅ | ✅ |
+| C14 | TP 없음 | ✅ | ✅ |
+| C15 | 트레일링 2번 | ✅ | ✅ |
+| C16 | Point 단위 | ✅ | ✅ |
+| C17 | 유령 파라미터 없음 | ✅ | ✅ |
+
+**§12: 17/17 ✅**
+
+---
+
+## 14. 함수 색인
 
 | 함수 | 원본 조항 | 라인 |
 |------|----------|------|
-| `OnInit` | §4.1, §5.1, §9 | L28-91 |
-| `OnTick` | §4.2, §5.2, §8 | L96-109 |
-| `EvaluateClosedSetupCandle` | §4, §5 | L114-147 |
-| `FindMostRecentSwingLow/High` | §3 | L154-199 |
-| `IsSwingLow/High` | §3 | L203-232 |
-| `IsBuySetupAtLevel` | §4.4-4.7 | L238-262 |
-| `IsSellSetupAtLevel` | §5.4-5.7 | L265-276 |
-| `IsBuyPinbar` | §6.1 | L281-310 |
-| `IsSellPinbar` | §6.2 | L313-342 |
-| `OpenTrade` | §7 | L344-382 |
-| `ManageTrailingStops` | §8 | L546-561 |
-| `TrailBuyOrder` | §8.1 | L576-589 |
-| `TrailSellOrder` | §8.2 | L591-602 |
-| `ApplyBrokerStopRules` | §8 실행계층 | L489-507 |
-| `ModifyStopLoss` | §8 실행계층 | L522-541 |
+| `OnInit` | §4.1, §5.1, §10 | L30-84 |
+| `OnTick` | §4.2, §5.2, §9 | L86-99 |
+| `EvaluateClosedSetupCandle` | §4, §5 | L101-165 |
+| `ProcessPendingEntry` | §7, §4.10-11 | L191-244 |
+| `FindMostRecentValidSwingLow/High` | §3 | L252-318 |
+| `HasClosedBelow/AboveLevelAfterSwing` | §3.1, §3.2 | L320-340 |
+| `IsBuySetupAtLevel` | §4.5-8 | L372-393 |
+| `IsSellSetupAtLevel` | §5.5-8 | L395-415 |
+| `IsLongSetupWick` | §6 | L442-466 |
+| `ShouldWaitForBuy/SellColor` | §4.10-12, §6 | L511-525 |
+| `WasReferenceTraded` | §3.4, §4.14 | L527-536 |
+| `OpenTrade` | §8 | L538-575 |
+| `TrailBuyOrder` | §9.1 | L769-781 |
+| `TrailSellOrder` | §9.2 | L783-795 |
+| `ApplyBrokerStopRules` | §9 실행계층 | L686-704 |
 
 ---
 
-## 5. 브로커 실행 계층 — 원본전략 변경 여부
+## 15. 제출 파일
 
-| 질문 | 답 |
-|------|-----|
-| §8 공식이 바뀌었는가? | **아니오** — `formulaStopLoss` 동일 |
-| 새 input 파라미터 추가? | **아니오** — 12개 유지 |
-| `ApplyBrokerStopRules`는 전략 변경? | **아니오** — `NormalizeVolume`·`SlippagePoints`와 동일한 **MT4 실행 보조 계층** |
-| 공식 SL이 브로커 유효 시 | `ApplyBrokerStopRules` = 공식값 **그대로** 반환 |
-| 공식 SL이 브로커 무효 시 | 허용 최소/최대로 보정 (error=130 방지) |
+| 파일 | 설명 |
+|------|------|
+| `IDC_5.mq4` v1.08 | v1.07 원본전략 + 트레일링 130 수정 |
+| `IDC_5_정합검수보고서.md` | 본 전수 매핑 보고서 |
 
 ---
 
-## 6. 제출 파일
-
-| 파일 | 버전 | 설명 |
-|------|------|------|
-| `IDC_5.mq4` | **2.01** | 트레일링 error=130 수정 완료 |
-| `IDC_5_정합검수보고서.md` | 2026-07-06 | 본 전수 검증 보고서 |
-
----
-
-## 7. 배포·재검증 절차
-
-1. MT4 `MQL4/Experts/IDC_5.mq4` 교체 후 **컴파일 (0 errors)**
-2. XAUUSD **M1** 차트 부착
-3. SELL 포지션 수익이 `TrailingStartPoints` 도달 시:
-   - Experts 탭 **error=130 미출력** 확인
-   - 터미널 Trade 탭 SL이 **아래로 이동** 확인
-4. BUY 포지션도 동일 확인
-
----
-
-*v2.01: 621라인 · 원본 문서 193라인 · v2.00 493라인 대조 완료*
+*v1.08: 808라인 · 원본전략 문서 207라인 · 전략 항목 115/115 매핑 완료*

@@ -2,29 +2,31 @@
 
 #property copyright "IDC_5"
 #property link      ""
-#property version   "2.01"
-#property description "GOLD M1 structure false-breakout pinbar strategy (original 1:1)"
+#property version   "1.08"
+#property description "GOLD M1 strict swing false-breakout pinbar strategy (v1.07 + trailing broker fix)"
 
-//--- §9 원본 입력 파라미터 (12개, 유령 파라미터 없음)
-input double Lots                       = 0.10;
-input int    MagicNumber                = 505;
-input int    SlippagePoints             = 30;
-input int    StopLossPoints             = 200;
-input int    TrailingStartPoints        = 200;
-input int    TrailingStepPoints         = 10;
-input int    StructureSearchBars        = 120;
-input int    SwingDepthBars             = 3;
-input int    LevelTouchTolerancePoints  = 30;
-input int    MinTailPoints              = 30;
-input double WickToBodyRatio            = 2.0;
-input double WickToOppositeWickRatio    = 1.5;
+input double Lots                     = 0.10;
+input int    MagicNumber              = 505;
+input int    SlippagePoints           = 30;
+input int    StopLossPoints           = 200;
+input int    TrailingStartPoints      = 200;
+input int    TrailingStepPoints       = 10;
+input int    SwingDepthBars           = 3;
+input int    SwingSearchBars          = 120;
+input int    MinFalseBreakoutPoints   = 1;
+input int    MinTailPoints            = 30;
+input double MinSignalWickPercent     = 50.0;
+input bool   DebugSignalFilters       = true;
 
-string   EA_NAME       = "IDC_5";
+string EA_NAME = "IDC_5";
 datetime lastM1BarTime = 0;
+int pendingEntryType = -1;
+int pendingEntryBarsRemaining = 0;
+double pendingReferenceLevel = 0.0;
+datetime pendingReferenceTime = 0;
+int lastTradedType = -1;
+datetime lastTradedReferenceTime = 0;
 
-//+------------------------------------------------------------------+
-//| §4.1 / §5.1 — M1 차트 검증, 파라미터 유효성 검증                    |
-//+------------------------------------------------------------------+
 int OnInit()
 {
    if(Lots <= 0.0)
@@ -49,12 +51,7 @@ int OnInit()
    }
    if(TrailingStartPoints <= 0 || TrailingStepPoints <= 0)
    {
-      Print(EA_NAME, ": TrailingStartPoints and TrailingStepPoints must be greater than zero.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   if(StructureSearchBars < 1)
-   {
-      Print(EA_NAME, ": StructureSearchBars must be at least 1.");
+      Print(EA_NAME, ": trailing values must be greater than zero.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(SwingDepthBars < 1)
@@ -62,37 +59,29 @@ int OnInit()
       Print(EA_NAME, ": SwingDepthBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(LevelTouchTolerancePoints < 0)
+   if(SwingSearchBars < 1)
    {
-      Print(EA_NAME, ": LevelTouchTolerancePoints cannot be negative.");
+      Print(EA_NAME, ": SwingSearchBars must be at least 1.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(MinTailPoints < 0)
+   if(MinFalseBreakoutPoints < 1 || MinTailPoints < 0)
    {
-      Print(EA_NAME, ": MinTailPoints cannot be negative.");
+      Print(EA_NAME, ": MinFalseBreakoutPoints must be >= 1 and MinTailPoints cannot be negative.");
       return(INIT_PARAMETERS_INCORRECT);
    }
-   if(WickToBodyRatio <= 0.0)
+   if(MinSignalWickPercent <= 0.0 || MinSignalWickPercent > 100.0)
    {
-      Print(EA_NAME, ": WickToBodyRatio must be greater than zero.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   if(WickToOppositeWickRatio <= 0.0)
-   {
-      Print(EA_NAME, ": WickToOppositeWickRatio must be greater than zero.");
+      Print(EA_NAME, ": MinSignalWickPercent must be between 0 and 100.");
       return(INIT_PARAMETERS_INCORRECT);
    }
 
    if(Period() != PERIOD_M1)
-      Print(EA_NAME, ": attach to M1. New entries are disabled on non-M1 charts.");
+      Print(EA_NAME, ": attach to M1. Entries are disabled on non-M1 charts.");
 
    lastM1BarTime = iTime(Symbol(), PERIOD_M1, 0);
    return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| 매 틱: §8 트레일링 / 새 M1 봉: §4·§5 진입 평가                     |
-//+------------------------------------------------------------------+
 void OnTick()
 {
    ManageTrailingStops();
@@ -108,55 +97,169 @@ void OnTick()
    EvaluateClosedSetupCandle();
 }
 
-//+------------------------------------------------------------------+
-//| §4.2 / §5.2 — 새 봉 첫 평가, shift=1 셋업캔들 평가                  |
-//+------------------------------------------------------------------+
 void EvaluateClosedSetupCandle()
 {
-   const int SETUP_SHIFT = 1;
-
-   int requiredBars = StructureSearchBars + SwingDepthBars * 2 + 5;
+   int requiredBars = SwingDepthBars * 2 + SwingSearchBars + 5;
    if(iBars(Symbol(), PERIOD_M1) < requiredBars)
+   {
+      DebugSignal("blocked: not enough M1 bars for swing search.");
       return;
+   }
 
-   // §4.8 / §5.8 — 기존 포지션 있으면 신규 진입 금지
    if(CountOpenPositions() > 0)
+   {
+      ClearPendingEntry();
+      DebugSignal("blocked: existing position for symbol/magic.");
       return;
+   }
+
+   if(HasPendingEntry())
+   {
+      if(ProcessPendingEntry())
+         return;
+   }
 
    double swingLow = 0.0;
    datetime swingLowTime = 0;
-   if(FindMostRecentSwingLow(swingLow, swingLowTime))
+   if(FindMostRecentValidSwingLow(swingLow, swingLowTime) && IsBuySetupAtLevel(swingLow))
    {
-      if(IsBuySetupAtLevel(swingLow, SETUP_SHIFT))
+      if(WasReferenceTraded(OP_BUY, swingLowTime))
       {
-         OpenTrade(OP_BUY);
+         DebugSignal("BUY blocked: same swing low reference already traded.");
          return;
       }
+
+      if(IsBuyColorCandle(1))
+      {
+         if(OpenTrade(OP_BUY))
+            MarkReferenceTraded(OP_BUY, swingLowTime);
+      }
+      else if(ShouldWaitForBuyColor(1))
+         StartPendingEntry(OP_BUY, swingLow, swingLowTime);
+      else
+         DebugSignal("BUY blocked: setup candle is unsupported doji for buy color rule.");
+      return;
    }
 
    double swingHigh = 0.0;
    datetime swingHighTime = 0;
-   if(FindMostRecentSwingHigh(swingHigh, swingHighTime))
+   if(FindMostRecentValidSwingHigh(swingHigh, swingHighTime) && IsSellSetupAtLevel(swingHigh))
    {
-      if(IsSellSetupAtLevel(swingHigh, SETUP_SHIFT))
+      if(WasReferenceTraded(OP_SELL, swingHighTime))
       {
-         OpenTrade(OP_SELL);
+         DebugSignal("SELL blocked: same swing high reference already traded.");
          return;
       }
+
+      if(IsSellColorCandle(1))
+      {
+         if(OpenTrade(OP_SELL))
+            MarkReferenceTraded(OP_SELL, swingHighTime);
+      }
+      else if(ShouldWaitForSellColor(1))
+         StartPendingEntry(OP_SELL, swingHigh, swingHighTime);
+      else
+         DebugSignal("SELL blocked: setup candle is unsupported doji for sell color rule.");
+      return;
    }
 }
 
-//+------------------------------------------------------------------+
-//| §3.1 — StructureSearchBars 내 가장 가까운 확정 스윙 저점             |
-//+------------------------------------------------------------------+
-bool FindMostRecentSwingLow(double &level, datetime &swingTime)
+bool HasPendingEntry()
+{
+   return((pendingEntryType == OP_BUY || pendingEntryType == OP_SELL) &&
+          pendingEntryBarsRemaining > 0 && pendingReferenceTime > 0);
+}
+
+void StartPendingEntry(int orderType, double referenceLevel, datetime referenceTime)
+{
+   pendingEntryType = orderType;
+   pendingEntryBarsRemaining = 2;
+   pendingReferenceLevel = referenceLevel;
+   pendingReferenceTime = referenceTime;
+   DebugSignal(StringFormat("pending %s started. reference=%s barsRemaining=%d",
+                            OrderTypeName(orderType), PriceText(referenceLevel), pendingEntryBarsRemaining));
+}
+
+void ClearPendingEntry()
+{
+   pendingEntryType = -1;
+   pendingEntryBarsRemaining = 0;
+   pendingReferenceLevel = 0.0;
+   pendingReferenceTime = 0;
+}
+
+bool ProcessPendingEntry()
+{
+   if(pendingEntryType == OP_BUY)
+   {
+      if(iClose(Symbol(), PERIOD_M1, 1) <= pendingReferenceLevel)
+      {
+         DebugSignal("pending BUY cancelled: candle closed back below/equal reference swing low.");
+         ClearPendingEntry();
+         return(false);
+      }
+      if(IsBuyColorCandle(1))
+      {
+         datetime referenceTime = pendingReferenceTime;
+         ClearPendingEntry();
+         if(OpenTrade(OP_BUY))
+            MarkReferenceTraded(OP_BUY, referenceTime);
+         return(true);
+      }
+   }
+   else if(pendingEntryType == OP_SELL)
+   {
+      if(iClose(Symbol(), PERIOD_M1, 1) >= pendingReferenceLevel)
+      {
+         DebugSignal("pending SELL cancelled: candle closed back above/equal reference swing high.");
+         ClearPendingEntry();
+         return(false);
+      }
+      if(IsSellColorCandle(1))
+      {
+         datetime referenceTime = pendingReferenceTime;
+         ClearPendingEntry();
+         if(OpenTrade(OP_SELL))
+            MarkReferenceTraded(OP_SELL, referenceTime);
+         return(true);
+      }
+   }
+   else
+   {
+      ClearPendingEntry();
+      return(false);
+   }
+
+   pendingEntryBarsRemaining--;
+   if(pendingEntryBarsRemaining > 0)
+   {
+      DebugSignal(StringFormat("pending %s waiting. barsRemaining=%d",
+                               OrderTypeName(pendingEntryType), pendingEntryBarsRemaining));
+      return(true);
+   }
+
+   DebugSignal(StringFormat("pending %s expired.", OrderTypeName(pendingEntryType)));
+   ClearPendingEntry();
+   return(false);
+}
+
+void DebugSignal(string message)
+{
+   if(DebugSignalFilters)
+      Print(EA_NAME, ": ", message);
+}
+
+bool FindMostRecentValidSwingLow(double &level, datetime &swingTime)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = 1 + SwingDepthBars;
-   int maxShift = MathMin(firstShift + StructureSearchBars - 1, bars - SwingDepthBars - 1);
+   int firstShift = 2 + SwingDepthBars;
+   int maxShift = MathMin(firstShift + SwingSearchBars - 1, bars - SwingDepthBars - 1);
 
    if(maxShift < firstShift)
+   {
+      DebugSignal("BUY blocked: no searchable swing-low range.");
       return(false);
+   }
 
    for(int shift = firstShift; shift <= maxShift; shift++)
    {
@@ -165,23 +268,32 @@ bool FindMostRecentSwingLow(double &level, datetime &swingTime)
 
       level = iLow(Symbol(), PERIOD_M1, shift);
       swingTime = iTime(Symbol(), PERIOD_M1, shift);
+
+      if(HasClosedBelowLevelAfterSwing(shift, level))
+      {
+         DebugSignal(StringFormat("BUY blocked: most recent swing low invalidated by close below. level=%s time=%s",
+                                  PriceText(level), TimeToString(swingTime, TIME_DATE|TIME_MINUTES)));
+         return(false);
+      }
+
       return(true);
    }
 
+   DebugSignal("BUY blocked: no confirmed swing low found.");
    return(false);
 }
 
-//+------------------------------------------------------------------+
-//| §3.2 — StructureSearchBars 내 가장 가까운 확정 스윙 고점             |
-//+------------------------------------------------------------------+
-bool FindMostRecentSwingHigh(double &level, datetime &swingTime)
+bool FindMostRecentValidSwingHigh(double &level, datetime &swingTime)
 {
    int bars = iBars(Symbol(), PERIOD_M1);
-   int firstShift = 1 + SwingDepthBars;
-   int maxShift = MathMin(firstShift + StructureSearchBars - 1, bars - SwingDepthBars - 1);
+   int firstShift = 2 + SwingDepthBars;
+   int maxShift = MathMin(firstShift + SwingSearchBars - 1, bars - SwingDepthBars - 1);
 
    if(maxShift < firstShift)
+   {
+      DebugSignal("SELL blocked: no searchable swing-high range.");
       return(false);
+   }
 
    for(int shift = firstShift; shift <= maxShift; shift++)
    {
@@ -190,15 +302,43 @@ bool FindMostRecentSwingHigh(double &level, datetime &swingTime)
 
       level = iHigh(Symbol(), PERIOD_M1, shift);
       swingTime = iTime(Symbol(), PERIOD_M1, shift);
+
+      if(HasClosedAboveLevelAfterSwing(shift, level))
+      {
+         DebugSignal(StringFormat("SELL blocked: most recent swing high invalidated by close above. level=%s time=%s",
+                                  PriceText(level), TimeToString(swingTime, TIME_DATE|TIME_MINUTES)));
+         return(false);
+      }
+
       return(true);
+   }
+
+   DebugSignal("SELL blocked: no confirmed swing high found.");
+   return(false);
+}
+
+bool HasClosedBelowLevelAfterSwing(int swingShift, double level)
+{
+   for(int shift = swingShift - 1; shift >= 2; shift--)
+   {
+      if(iClose(Symbol(), PERIOD_M1, shift) < level)
+         return(true);
    }
 
    return(false);
 }
 
-//+------------------------------------------------------------------+
-//| §3.1 — SwingDepthBars 좌우 비교 확정 스윙 저점                     |
-//+------------------------------------------------------------------+
+bool HasClosedAboveLevelAfterSwing(int swingShift, double level)
+{
+   for(int shift = swingShift - 1; shift >= 2; shift--)
+   {
+      if(iClose(Symbol(), PERIOD_M1, shift) > level)
+         return(true);
+   }
+
+   return(false);
+}
+
 bool IsSwingLow(int shift)
 {
    double pivotLow = iLow(Symbol(), PERIOD_M1, shift);
@@ -214,9 +354,6 @@ bool IsSwingLow(int shift)
    return(true);
 }
 
-//+------------------------------------------------------------------+
-//| §3.2 — SwingDepthBars 좌우 비교 확정 스윙 고점                     |
-//+------------------------------------------------------------------+
 bool IsSwingHigh(int shift)
 {
    double pivotHigh = iHigh(Symbol(), PERIOD_M1, shift);
@@ -232,115 +369,172 @@ bool IsSwingHigh(int shift)
    return(true);
 }
 
-//+------------------------------------------------------------------+
-//| §4.4·§4.5·§4.6·§4.7 — BUY 셋업캔들 조건                           |
-//+------------------------------------------------------------------+
-bool IsBuySetupAtLevel(double swingLow, int shift)
+bool IsBuySetupAtLevel(double support)
 {
+   int shift = 1;
    double setupLow = iLow(Symbol(), PERIOD_M1, shift);
+   double setupClose = iClose(Symbol(), PERIOD_M1, shift);
+   double minPierce = MinFalseBreakoutPoints * Point;
 
-   // §4.4 — 저가가 직전 저점을 하향 돌파하면 안 된다
-   if(setupLow < swingLow)
+   if(setupLow > support - minPierce)
+   {
+      DebugSignal(StringFormat("BUY blocked: setup low did not pierce swing low. setupLow=%s level=%s minPierce=%d",
+                               PriceText(setupLow), PriceText(support), MinFalseBreakoutPoints));
       return(false);
-
-   // §4.5 — 저가는 직전 저점으로부터 LevelTouchTolerancePoints 이내
-   double distancePoints = (setupLow - swingLow) / Point;
-   if(distancePoints > LevelTouchTolerancePoints)
+   }
+   if(setupClose <= support)
+   {
+      DebugSignal(StringFormat("BUY blocked: setup close not back above swing low. close=%s level=%s",
+                               PriceText(setupClose), PriceText(support)));
       return(false);
+   }
 
-   // §4.6·§4.7·§6.1 — 양봉 + 긴 아래꼬리 핀바
-   return(IsBuyPinbar(shift));
+   return(IsLongLowerWick(shift));
 }
 
-//+------------------------------------------------------------------+
-//| §5.4·§5.5·§5.6·§5.7 — SELL 셋업캔들 조건                          |
-//+------------------------------------------------------------------+
-bool IsSellSetupAtLevel(double swingHigh, int shift)
+bool IsSellSetupAtLevel(double resistance)
 {
+   int shift = 1;
    double setupHigh = iHigh(Symbol(), PERIOD_M1, shift);
+   double setupClose = iClose(Symbol(), PERIOD_M1, shift);
+   double minPierce = MinFalseBreakoutPoints * Point;
 
-   // §5.4 — 고가가 직전 고점을 상향 돌파하면 안 된다
-   if(setupHigh > swingHigh)
+   if(setupHigh < resistance + minPierce)
+   {
+      DebugSignal(StringFormat("SELL blocked: setup high did not pierce swing high. setupHigh=%s level=%s minPierce=%d",
+                               PriceText(setupHigh), PriceText(resistance), MinFalseBreakoutPoints));
       return(false);
-
-   // §5.5 — 고가는 직전 고점으로부터 LevelTouchTolerancePoints 이내
-   double distancePoints = (swingHigh - setupHigh) / Point;
-   if(distancePoints > LevelTouchTolerancePoints)
+   }
+   if(setupClose >= resistance)
+   {
+      DebugSignal(StringFormat("SELL blocked: setup close not back below swing high. close=%s level=%s",
+                               PriceText(setupClose), PriceText(resistance)));
       return(false);
+   }
 
-   // §5.6·§5.7·§6.2 — 음봉 + 긴 위꼬리 핀바
-   return(IsSellPinbar(shift));
+   return(IsLongUpperWick(shift));
 }
 
-//+------------------------------------------------------------------+
-//| §6.1 BUY 핀바 — 4조건 전부                                        |
-//+------------------------------------------------------------------+
-bool IsBuyPinbar(int shift)
+bool IsLongLowerWick(int shift)
 {
-   double openPrice  = iOpen(Symbol(), PERIOD_M1, shift);
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
    double closePrice = iClose(Symbol(), PERIOD_M1, shift);
-   double highPrice  = iHigh(Symbol(), PERIOD_M1, shift);
-   double lowPrice   = iLow(Symbol(), PERIOD_M1, shift);
-
-   // §6.1-1 — 양봉 마감 (마감가 > 시가)
-   if(closePrice <= openPrice)
-      return(false);
-
-   double body      = closePrice - openPrice;
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
    double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
+   double candleRange = highPrice - lowPrice;
+
+   return(IsLongSetupWick(lowerWick, candleRange, "BUY"));
+}
+
+bool IsLongUpperWick(int shift)
+{
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
+   double closePrice = iClose(Symbol(), PERIOD_M1, shift);
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
    double upperWick = highPrice - MathMax(openPrice, closePrice);
+   double candleRange = highPrice - lowPrice;
 
-   // §6.1-2 — MinTailPoints
-   if(lowerWick < MinTailPoints * Point)
-      return(false);
+   return(IsLongSetupWick(upperWick, candleRange, "SELL"));
+}
 
-   // §6.1-3 — WickToBodyRatio
-   if(lowerWick < WickToBodyRatio * body)
+bool IsLongSetupWick(double signalWick, double candleRange, string side)
+{
+   if(signalWick < MinTailPoints * Point)
+   {
+      DebugSignal(StringFormat("%s blocked: signal wick shorter than MinTailPoints. wickPoints=%s min=%d",
+                               side, DoubleToString(signalWick / Point, 1), MinTailPoints));
       return(false);
+   }
 
-   // §6.1-4 — WickToOppositeWickRatio
-   if(lowerWick < WickToOppositeWickRatio * upperWick)
+   if(candleRange <= 0.0)
+   {
+      DebugSignal(StringFormat("%s blocked: candle range is zero.", side));
       return(false);
+   }
+
+   double wickPercent = signalWick * 100.0 / candleRange;
+   if(wickPercent < MinSignalWickPercent)
+   {
+      DebugSignal(StringFormat("%s blocked: signal wick percent too small. wickPercent=%s min=%s",
+                               side, DoubleToString(wickPercent, 1), DoubleToString(MinSignalWickPercent, 1)));
+      return(false);
+   }
 
    return(true);
 }
 
-//+------------------------------------------------------------------+
-//| §6.2 SELL 핀바 — 4조건 전부                                       |
-//+------------------------------------------------------------------+
-bool IsSellPinbar(int shift)
+bool IsBuyColorCandle(int shift)
 {
-   double openPrice  = iOpen(Symbol(), PERIOD_M1, shift);
-   double closePrice = iClose(Symbol(), PERIOD_M1, shift);
-   double highPrice  = iHigh(Symbol(), PERIOD_M1, shift);
-   double lowPrice   = iLow(Symbol(), PERIOD_M1, shift);
-
-   // §6.2-1 — 음봉 마감 (마감가 < 시가)
-   if(closePrice >= openPrice)
-      return(false);
-
-   double body      = openPrice - closePrice;
-   double upperWick = highPrice - MathMax(openPrice, closePrice);
-   double lowerWick = MathMin(openPrice, closePrice) - lowPrice;
-
-   // §6.2-2 — MinTailPoints
-   if(upperWick < MinTailPoints * Point)
-      return(false);
-
-   // §6.2-3 — WickToBodyRatio
-   if(upperWick < WickToBodyRatio * body)
-      return(false);
-
-   // §6.2-4 — WickToOppositeWickRatio
-   if(upperWick < WickToOppositeWickRatio * lowerWick)
-      return(false);
-
-   return(true);
+   return(iClose(Symbol(), PERIOD_M1, shift) > iOpen(Symbol(), PERIOD_M1, shift));
 }
 
-//+------------------------------------------------------------------+
-//| §7.1·§7.2·§7.3 — 주문 진입 (TP=0.0)                                |
-//+------------------------------------------------------------------+
+bool IsSellColorCandle(int shift)
+{
+   return(iClose(Symbol(), PERIOD_M1, shift) < iOpen(Symbol(), PERIOD_M1, shift));
+}
+
+bool IsDojiCandle(int shift)
+{
+   return(iClose(Symbol(), PERIOD_M1, shift) == iOpen(Symbol(), PERIOD_M1, shift));
+}
+
+bool IsBullishShapeDoji(int shift)
+{
+   if(!IsDojiCandle(shift))
+      return(false);
+
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
+   double upperWick = highPrice - openPrice;
+   double lowerWick = openPrice - lowPrice;
+
+   return(upperWick < lowerWick);
+}
+
+bool IsBearishShapeDoji(int shift)
+{
+   if(!IsDojiCandle(shift))
+      return(false);
+
+   double highPrice = iHigh(Symbol(), PERIOD_M1, shift);
+   double lowPrice = iLow(Symbol(), PERIOD_M1, shift);
+   double openPrice = iOpen(Symbol(), PERIOD_M1, shift);
+   double upperWick = highPrice - openPrice;
+   double lowerWick = openPrice - lowPrice;
+
+   return(upperWick > lowerWick);
+}
+
+bool ShouldWaitForBuyColor(int shift)
+{
+   if(IsSellColorCandle(shift))
+      return(true);
+
+   return(IsBullishShapeDoji(shift));
+}
+
+bool ShouldWaitForSellColor(int shift)
+{
+   if(IsBuyColorCandle(shift))
+      return(true);
+
+   return(IsBearishShapeDoji(shift));
+}
+
+bool WasReferenceTraded(int orderType, datetime referenceTime)
+{
+   return(lastTradedType == orderType && lastTradedReferenceTime == referenceTime);
+}
+
+void MarkReferenceTraded(int orderType, datetime referenceTime)
+{
+   lastTradedType = orderType;
+   lastTradedReferenceTime = referenceTime;
+}
+
 bool OpenTrade(int orderType)
 {
    RefreshRates();
@@ -386,8 +580,8 @@ bool OpenTrade(int orderType)
 
 double NormalizeVolume(double requestedLots)
 {
-   double minLot  = MarketInfo(Symbol(), MODE_MINLOT);
-   double maxLot  = MarketInfo(Symbol(), MODE_MAXLOT);
+   double minLot = MarketInfo(Symbol(), MODE_MINLOT);
+   double maxLot = MarketInfo(Symbol(), MODE_MAXLOT);
    double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
 
    double volume = requestedLots;
@@ -402,9 +596,6 @@ double NormalizeVolume(double requestedLots)
    return(NormalizeDouble(volume, 2));
 }
 
-//+------------------------------------------------------------------+
-//| §4.8 / §5.8 / §10 — 심볼+매직 단일 포지션                          |
-//+------------------------------------------------------------------+
 int CountOpenPositions()
 {
    int count = 0;
@@ -553,9 +744,6 @@ bool ModifyStopLoss(int orderType, double newStopLoss, color modifyColor)
    return(false);
 }
 
-//+------------------------------------------------------------------+
-//| §8 — 트레일링 스탑 (2번 방식)                                      |
-//+------------------------------------------------------------------+
 void ManageTrailingStops()
 {
    RefreshRates();
@@ -575,9 +763,6 @@ void ManageTrailingStops()
    }
 }
 
-//+------------------------------------------------------------------+
-//| §8.1 BUY 트레일링 공식                                             |
-//+------------------------------------------------------------------+
 void TrailBuyOrder()
 {
    double profitPoints = (Bid - OrderOpenPrice()) / Point;
@@ -593,9 +778,6 @@ void TrailBuyOrder()
    ModifyStopLoss(OP_BUY, newStopLoss, clrLime);
 }
 
-//+------------------------------------------------------------------+
-//| §8.2 SELL 트레일링 공식                                            |
-//+------------------------------------------------------------------+
 void TrailSellOrder()
 {
    double profitPoints = (OrderOpenPrice() - Ask) / Point;
@@ -609,6 +791,11 @@ void TrailSellOrder()
    double newStopLoss = ApplyBrokerStopRules(OP_SELL, formulaStopLoss);
 
    ModifyStopLoss(OP_SELL, newStopLoss, clrRed);
+}
+
+string PriceText(double price)
+{
+   return(DoubleToString(price, Digits));
 }
 
 string OrderTypeName(int orderType)
