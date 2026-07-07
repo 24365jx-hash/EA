@@ -3,7 +3,7 @@
 //| 9EMA first breakout + candle shape + RSI confirmation            |
 //+------------------------------------------------------------------+
 #property copyright "IDC_A"
-#property version   "1.02"
+#property version   "2.00"
 #property strict
 
 enum ENUM_LOT_MODE
@@ -25,24 +25,24 @@ input double InpRsiUpper  = 52.0;        // BUY RSI level
 input double InpRsiLower  = 48.0;        // SELL RSI level
 
 //--- Lot sizing
-input ENUM_LOT_MODE InpLotMode           = LOT_MANUAL;
-input double        InpManualLots        = 0.01;   // Manual lot size
-input double        InpAutoLotsPer10000   = 0.01;   // Auto: lots per 10,000 balance
+input ENUM_LOT_MODE InpLotMode          = LOT_MANUAL;
+input double        InpManualLots       = 0.01;   // Manual lot size
+input double        InpAutoLotsPer10000 = 0.01;   // Auto: lots per 10,000 balance
 
 //--- Risk / exit
-input int InpStopLossPoints   = 500;       // SL distance from entry (points, mandatory)
-input int InpTrailingStartPts = 200;       // Trailing start (points profit)
-input int InpTrailingStepPts  = 10;        // Trailing step (points)
+input int InpStopLossPoints   = 500;     // SL distance from entry (points, mandatory)
+input int InpTrailingStartPts = 200;     // Trailing start (points profit)
+input int InpTrailingStepPts  = 10;      // Trailing step (points)
 
 //--- Trade settings
 input int    InpMagicNumber  = 80001;
-input int    InpSlippagePts  = 30;        // OrderSend max deviation (points)
+input int    InpSlippagePts  = 30;       // OrderSend max deviation (points)
 input string InpTradeComment = "IDC_A";
 
 //--- Debug / display
-input bool InpDebugBarLog   = false;     // Experts tab per-bar O/X log
-input bool InpChartPanel      = true;      // Chart left dashboard
-input int  InpPanelFontSize   = 13;        // Dashboard font size (8-16)
+input bool InpDebugBarLog  = false;      // Experts tab per-bar O/X log
+input bool InpChartPanel   = true;       // Chart left dashboard
+input int  InpPanelFontSize = 13;        // Dashboard font size (8-16)
 
 string   g_trade_symbol      = "";
 int      g_broker_gmt_offset = 0;
@@ -341,7 +341,7 @@ bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
   }
 
 //+------------------------------------------------------------------+
-//| RSI baseline breakout on closed bar — touch at level is invalid     |
+//| RSI: breakout close OR already beyond level — line touch invalid  |
 //+------------------------------------------------------------------+
 bool IsRsiBreakoutAbove(const double rsi_prev, const double rsi_curr, const double level)
   {
@@ -358,9 +358,7 @@ bool IsRsiBreakoutBelow(const double rsi_prev, const double rsi_curr, const doub
 void GetCandleWicks(const int shift,
                     double &body,
                     double &upper_wick,
-                    double &lower_wick,
-                    bool   &is_bearish,
-                    bool   &is_bullish)
+                    double &lower_wick)
   {
    double open  = iOpen(TradeSymbol(), Period(), shift);
    double close = iClose(TradeSymbol(), Period(), shift);
@@ -370,16 +368,13 @@ void GetCandleWicks(const int shift,
    body       = MathAbs(close - open);
    upper_wick = high - MathMax(open, close);
    lower_wick = MathMin(open, close) - low;
-   is_bearish = (close < open);
-   is_bullish = (close > open);
   }
 
 //+------------------------------------------------------------------+
 bool IsBodyDominant(const int shift)
   {
    double body = 0.0, upper_wick = 0.0, lower_wick = 0.0;
-   bool   bear = false, bull = false;
-   GetCandleWicks(shift, body, upper_wick, lower_wick, bear, bull);
+   GetCandleWicks(shift, body, upper_wick, lower_wick);
    return (body > upper_wick + lower_wick);
   }
 
@@ -387,8 +382,7 @@ bool IsBodyDominant(const int shift)
 bool IsSellWickShape(const int shift)
   {
    double body = 0.0, upper_wick = 0.0, lower_wick = 0.0;
-   bool   bear = false, bull = false;
-   GetCandleWicks(shift, body, upper_wick, lower_wick, bear, bull);
+   GetCandleWicks(shift, body, upper_wick, lower_wick);
    return (lower_wick < upper_wick);
   }
 
@@ -396,8 +390,7 @@ bool IsSellWickShape(const int shift)
 bool IsBuyWickShape(const int shift)
   {
    double body = 0.0, upper_wick = 0.0, lower_wick = 0.0;
-   bool   bear = false, bull = false;
-   GetCandleWicks(shift, body, upper_wick, lower_wick, bear, bull);
+   GetCandleWicks(shift, body, upper_wick, lower_wick);
    return (upper_wick < lower_wick);
   }
 
@@ -458,9 +451,6 @@ bool IsBuyEmaFirstBreakout(const int setup_shift)
   }
 
 //+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| SELL RSI: strict breakout close or already below — no line touch  |
-//+------------------------------------------------------------------+
 bool IsSellRsiOk(const double rsi_prev, const double rsi_curr)
   {
    if(rsi_curr >= InpRsiLower)
@@ -475,8 +465,6 @@ bool IsSellRsiOk(const double rsi_prev, const double rsi_curr)
    return false;
   }
 
-//+------------------------------------------------------------------+
-//| BUY RSI: strict breakout close or already above — no line touch   |
 //+------------------------------------------------------------------+
 bool IsBuyRsiOk(const double rsi_prev, const double rsi_curr)
   {
@@ -850,7 +838,7 @@ bool OpenPositionAtSetupClose(const int order_type)
      }
 
    Print("IDC_A: ", (order_type == OP_BUY ? "BUY" : "SELL"),
-         " entry ticket=", ticket,
+         " cycle start | ticket=", ticket,
          " lots=", DoubleToString(lots, 2),
          " setup_close=", setup_close,
          " fill=", send_price,
@@ -1059,13 +1047,13 @@ void RenderChartDashboard(const datetime bar_time,
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_A v1.02  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_A v2.00  " + TradeSymbol() + " M1",
                     clrGold);
    SetDashboardLine(line++,
                     "브로커 " + FormatBrokerTime(g_broker_time) + "  " + BrokerOffsetLabel(),
                     clrSilver);
    SetDashboardLine(line++,
-                    "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
+                    "셋업봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
                     clrWhite);
    SetDashboardLine(line++,
                     StringFormat("사이클:%s  랏:%s %.2f  SL:%dpt",
@@ -1097,7 +1085,7 @@ void RenderChartDashboard(const datetime bar_time,
                     StringFormat("SELL 5 음봉 %s", PanelMark(sell_color)),
                     PanelResultColor(sell_color));
    SetDashboardLine(line++,
-                    StringFormat("SELL 6 RSI%.0f↓돌파마감 %s  RSI=%s",
+                    StringFormat("SELL 6 RSI%.0f↓돌파/이탈 %s  RSI=%s",
                                  InpRsiLower, PanelMark(sell_rsi), rsi_val),
                     PanelResultColor(sell_rsi));
 
@@ -1119,14 +1107,14 @@ void RenderChartDashboard(const datetime bar_time,
                     StringFormat("BUY 5 양봉 %s", PanelMark(buy_color)),
                     PanelResultColor(buy_color));
    SetDashboardLine(line++,
-                    StringFormat("BUY 6 RSI%.0f↑돌파마감 %s  RSI=%s",
+                    StringFormat("BUY 6 RSI%.0f↑돌파/이탈 %s  RSI=%s",
                                  InpRsiUpper, PanelMark(buy_rsi), rsi_val),
                     PanelResultColor(buy_rsi));
 
    SetDashboardLine(line++, "========================================", clrDimGray);
 
    if(has_pos)
-      SetDashboardLine(line++, "포지션 보유중 - 신규진입 없음", clrOrange);
+      SetDashboardLine(line++, "포지션 보유중 - 사이클 진행", clrOrange);
    else
       SetDashboardLine(line++,
                        StringFormat(">>> SELL %s  BUY %s <<<",
@@ -1202,13 +1190,6 @@ void ProcessClosedBarEntry()
    EvaluateSellSetup(SETUP_SHIFT, s_ema, s_body, s_wick, s_color, s_rsi, s_all);
    EvaluateBuySetup(SETUP_SHIFT, b_ema, b_body, b_wick, b_color, b_rsi, b_all);
 
-   if(s_all && b_all)
-     {
-      Print("IDC_A: both SELL and BUY on same bar - SELL priority.");
-      OpenPositionAtSetupClose(OP_SELL);
-      return;
-     }
-
    if(s_all)
       OpenPositionAtSetupClose(OP_SELL);
    else if(b_all)
@@ -1218,6 +1199,11 @@ void ProcessClosedBarEntry()
 //+------------------------------------------------------------------+
 bool ValidateInputs()
   {
+   if(Period() != PERIOD_M1)
+     {
+      Print("IDC_A: chart must be M1 timeframe.");
+      return false;
+     }
    if(InpEmaPeriod < 1)
      {
       Print("IDC_A: EMA period must be >= 1");
@@ -1284,12 +1270,9 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   if(Period() != PERIOD_M1)
-      Print("IDC_A: WARNING - strategy designed for M1. current TF=", TimeframeLabel());
-
-   Print("IDC_A init v1.02 | trade symbol=", g_trade_symbol,
+   Print("IDC_A init v2.00 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
-         " | timeframe=", TimeframeLabel(),
+         " | timeframe=M1",
          " | broker time=", FormatBrokerTime(g_broker_time),
          " | offset=", BrokerOffsetLabel(),
          " | lot mode=", LotModeLabel(),
