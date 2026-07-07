@@ -3,7 +3,7 @@
 //| 9EMA first breakout + candle shape + RSI confirmation            |
 //+------------------------------------------------------------------+
 #property copyright "IDC_A"
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 enum ENUM_LOT_MODE
@@ -341,15 +341,17 @@ bool GetRsiPair(const int shift, double &rsi_curr, double &rsi_prev)
   }
 
 //+------------------------------------------------------------------+
+//| RSI baseline breakout on closed bar — touch at level is invalid     |
+//+------------------------------------------------------------------+
 bool IsRsiBreakoutAbove(const double rsi_prev, const double rsi_curr, const double level)
   {
-   return (rsi_prev <= level && rsi_curr > level);
+   return (rsi_prev < level && rsi_curr > level);
   }
 
 //+------------------------------------------------------------------+
 bool IsRsiBreakoutBelow(const double rsi_prev, const double rsi_curr, const double level)
   {
-   return (rsi_prev >= level && rsi_curr < level);
+   return (rsi_prev > level && rsi_curr < level);
   }
 
 //+------------------------------------------------------------------+
@@ -456,19 +458,38 @@ bool IsBuyEmaFirstBreakout(const int setup_shift)
   }
 
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| SELL RSI: strict breakout close or already below — no line touch  |
+//+------------------------------------------------------------------+
 bool IsSellRsiOk(const double rsi_prev, const double rsi_curr)
   {
+   if(rsi_curr >= InpRsiLower)
+      return false;
+
    if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
       return true;
-   return (rsi_curr <= InpRsiLower);
+
+   if(rsi_prev < InpRsiLower && rsi_curr < InpRsiLower)
+      return true;
+
+   return false;
   }
 
 //+------------------------------------------------------------------+
+//| BUY RSI: strict breakout close or already above — no line touch   |
+//+------------------------------------------------------------------+
 bool IsBuyRsiOk(const double rsi_prev, const double rsi_curr)
   {
+   if(rsi_curr <= InpRsiUpper)
+      return false;
+
    if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
       return true;
-   return (rsi_curr >= InpRsiUpper);
+
+   if(rsi_prev > InpRsiUpper && rsi_curr > InpRsiUpper)
+      return true;
+
+   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -1038,7 +1059,7 @@ void RenderChartDashboard(const datetime bar_time,
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_A v1.01  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_A v1.02  " + TradeSymbol() + " " + TimeframeLabel(),
                     clrGold);
    SetDashboardLine(line++,
                     "브로커 " + FormatBrokerTime(g_broker_time) + "  " + BrokerOffsetLabel(),
@@ -1076,7 +1097,7 @@ void RenderChartDashboard(const datetime bar_time,
                     StringFormat("SELL 5 음봉 %s", PanelMark(sell_color)),
                     PanelResultColor(sell_color));
    SetDashboardLine(line++,
-                    StringFormat("SELL 6 RSI%.0f↓/이하 %s  RSI=%s",
+                    StringFormat("SELL 6 RSI%.0f↓돌파마감 %s  RSI=%s",
                                  InpRsiLower, PanelMark(sell_rsi), rsi_val),
                     PanelResultColor(sell_rsi));
 
@@ -1098,7 +1119,7 @@ void RenderChartDashboard(const datetime bar_time,
                     StringFormat("BUY 5 양봉 %s", PanelMark(buy_color)),
                     PanelResultColor(buy_color));
    SetDashboardLine(line++,
-                    StringFormat("BUY 6 RSI%.0f↑/이상 %s  RSI=%s",
+                    StringFormat("BUY 6 RSI%.0f↑돌파마감 %s  RSI=%s",
                                  InpRsiUpper, PanelMark(buy_rsi), rsi_val),
                     PanelResultColor(buy_rsi));
 
@@ -1266,7 +1287,7 @@ int OnInit()
    if(Period() != PERIOD_M1)
       Print("IDC_A: WARNING - strategy designed for M1. current TF=", TimeframeLabel());
 
-   Print("IDC_A init v1.01 | trade symbol=", g_trade_symbol,
+   Print("IDC_A init v1.02 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(),
          " | broker time=", FormatBrokerTime(g_broker_time),
