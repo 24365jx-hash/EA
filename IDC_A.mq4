@@ -3,7 +3,7 @@
 //| 9EMA first breakout + candle shape + RSI confirmation            |
 //+------------------------------------------------------------------+
 #property copyright "IDC_A"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 enum ENUM_LOT_MODE
@@ -36,7 +36,7 @@ input int InpTrailingStepPts  = 10;        // Trailing step (points)
 
 //--- Trade settings
 input int    InpMagicNumber  = 80001;
-input int    InpSlippagePts  = 30;
+input int    InpSlippagePts  = 30;        // OrderSend max deviation (points)
 input string InpTradeComment = "IDC_A";
 
 //--- Debug / display
@@ -48,7 +48,6 @@ string   g_trade_symbol      = "";
 int      g_broker_gmt_offset = 0;
 datetime g_broker_time       = 0;
 datetime g_last_bar_time     = 0;
-bool     g_entry_taken       = false;
 
 //+------------------------------------------------------------------+
 string TradeSymbol()
@@ -321,12 +320,6 @@ bool HasOpenPosition()
   }
 
 //+------------------------------------------------------------------+
-void SyncCycleFromPositions()
-  {
-   g_entry_taken = HasOpenPosition();
-  }
-
-//+------------------------------------------------------------------+
 bool GetEma(const int shift, double &ema)
   {
    if(iBars(TradeSymbol(), Period()) < InpEmaPeriod + shift + 2)
@@ -467,7 +460,7 @@ bool IsSellRsiOk(const double rsi_prev, const double rsi_curr)
   {
    if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
       return true;
-   return (rsi_curr < InpRsiLower);
+   return (rsi_curr <= InpRsiLower);
   }
 
 //+------------------------------------------------------------------+
@@ -475,7 +468,7 @@ bool IsBuyRsiOk(const double rsi_prev, const double rsi_curr)
   {
    if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
       return true;
-   return (rsi_curr > InpRsiUpper);
+   return (rsi_curr >= InpRsiUpper);
   }
 
 //+------------------------------------------------------------------+
@@ -597,17 +590,6 @@ double BuildInitialSL(const int order_type, const double entry_price)
       return NormalizeTradePrice(entry_price - PointsToPrice(InpStopLossPoints));
 
    return NormalizeTradePrice(entry_price + PointsToPrice(InpStopLossPoints));
-  }
-
-//+------------------------------------------------------------------+
-bool IsEntrySlippageAcceptable(const int order_type, const double setup_close)
-  {
-   RefreshRates();
-
-   double market = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
-   double diff_pts = MathAbs(market - setup_close) / TradePoint();
-
-   return (diff_pts <= InpSlippagePts);
   }
 
 //+------------------------------------------------------------------+
@@ -807,13 +789,6 @@ bool OpenPositionAtSetupClose(const int order_type)
       return false;
      }
 
-   if(!IsEntrySlippageAcceptable(order_type, setup_close))
-     {
-      Print("IDC_A: entry skipped. setup close=", setup_close,
-            " market=", send_price, " max slippage pts=", InpSlippagePts);
-      return false;
-     }
-
    if(InpStopLossPoints <= 0)
      {
       Print("IDC_A: entry blocked. StopLossPoints must be > 0 for mandatory SL.");
@@ -832,8 +807,6 @@ bool OpenPositionAtSetupClose(const int order_type)
    color arrow = (order_type == OP_BUY) ? clrGreen : clrRed;
    int ticket  = -1;
 
-   g_entry_taken = true;
-
    for(int attempt = 0; attempt < 5; attempt++)
      {
       RefreshRates();
@@ -851,7 +824,6 @@ bool OpenPositionAtSetupClose(const int order_type)
 
    if(ticket < 0)
      {
-      g_entry_taken = false;
       Print("IDC_A: OrderSend failed after retries. error=", GetLastError());
       return false;
      }
@@ -1059,15 +1031,18 @@ void RenderChartDashboard(const datetime bar_time,
                           const bool buy_all,
                           const bool has_pos)
   {
-   const int PNL_LINE_COUNT = 20;
+   const int PNL_LINE_COUNT = 21;
 
    ClearChartDashboard();
    SetDashboardBackground(PNL_LINE_COUNT);
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_A v1.00  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_A v1.01  " + TradeSymbol() + " " + TimeframeLabel(),
                     clrGold);
+   SetDashboardLine(line++,
+                    "브로커 " + FormatBrokerTime(g_broker_time) + "  " + BrokerOffsetLabel(),
+                    clrSilver);
    SetDashboardLine(line++,
                     "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
                     clrWhite);
@@ -1167,12 +1142,17 @@ void UpdateBarConditionDisplay()
 
    if(InpDebugBarLog)
      {
-      Print("IDC_A|BAR|", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
-            "|SELL=", Ox(s_all),
-            "|EMA=", Ox(s_ema), "|BODY=", Ox(s_body), "|WICK=", Ox(s_wick),
-            "|COLOR=", Ox(s_color), "|RSI=", Ox(s_rsi),
-            "|BUY=", Ox(b_all),
-            "|POS=", Ox(has_pos));
+      static datetime s_last_debug_bar = 0;
+      if(bar_time != 0 && bar_time != s_last_debug_bar)
+        {
+         s_last_debug_bar = bar_time;
+         Print("IDC_A|BAR|", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
+               "|SELL=", Ox(s_all),
+               "|EMA=", Ox(s_ema), "|BODY=", Ox(s_body), "|WICK=", Ox(s_wick),
+               "|COLOR=", Ox(s_color), "|RSI=", Ox(s_rsi),
+               "|BUY=", Ox(b_all),
+               "|POS=", Ox(has_pos));
+        }
      }
 
    if(!InpChartPanel)
@@ -1193,12 +1173,7 @@ void ProcessClosedBarEntry()
    const int SETUP_SHIFT = 1;
 
    if(HasOpenPosition())
-     {
-      UpdateBarConditionDisplay();
       return;
-     }
-
-   g_entry_taken = false;
 
    bool s_ema = false, s_body = false, s_wick = false, s_color = false, s_rsi = false, s_all = false;
    bool b_ema = false, b_body = false, b_wick = false, b_color = false, b_rsi = false, b_all = false;
@@ -1208,8 +1183,8 @@ void ProcessClosedBarEntry()
 
    if(s_all && b_all)
      {
-      Print("IDC_A: both SELL and BUY signals on same bar - no entry.");
-      UpdateBarConditionDisplay();
+      Print("IDC_A: both SELL and BUY on same bar - SELL priority.");
+      OpenPositionAtSetupClose(OP_SELL);
       return;
      }
 
@@ -1217,8 +1192,6 @@ void ProcessClosedBarEntry()
       OpenPositionAtSetupClose(OP_SELL);
    else if(b_all)
       OpenPositionAtSetupClose(OP_BUY);
-
-   UpdateBarConditionDisplay();
   }
 
 //+------------------------------------------------------------------+
@@ -1290,7 +1263,10 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_A init v1.00 | trade symbol=", g_trade_symbol,
+   if(Period() != PERIOD_M1)
+      Print("IDC_A: WARNING - strategy designed for M1. current TF=", TimeframeLabel());
+
+   Print("IDC_A init v1.01 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(),
          " | broker time=", FormatBrokerTime(g_broker_time),
@@ -1300,7 +1276,6 @@ int OnInit()
          " | freeze level pts=", DoubleToString(GetFreezeLevelPts(), 0));
 
    g_last_bar_time = iTime(TradeSymbol(), Period(), 0);
-   SyncCycleFromPositions();
    UpdateBarConditionDisplay();
 
    if(!InpChartPanel)
@@ -1322,8 +1297,8 @@ void OnTick()
    ProtectAllPositionsStopLoss();
    ManageTrailingStop();
 
-   if(!HasOpenPosition())
-      g_entry_taken = false;
+   if(InpChartPanel || InpDebugBarLog)
+      UpdateBarConditionDisplay();
 
    if(!IsNewBar())
       return;
