@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.15
+## 원본 전략 자료 (Official Strategy Document) v3.16
 
 | 항목 | 내용 |
 |------|------|
@@ -102,3 +102,4 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 | v3.13 | 관찰만료→Cyc=NONE, init 즉시처리, 진입락, 크로스중복리셋 방지, 리플레이 크로스봉 포함 |
 | v3.14 | 차트 좌측 매봉 진입조건 패널 (`InpChartPanel`) — 실측/설정/O/X 직관 표시 |
 | v3.15 | 대시보드 전면개편: OBJ라벨+배경, 34EMA각도 항상표시, NONE도 1~10 전부, `InpPanelFontSize` |
+| v3.16 | **유예버그 수정**: 리플레이 유예소모 제거, 이중만료 삭제, 첫셋업봉 진입 보장 |

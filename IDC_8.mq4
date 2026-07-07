@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.15"
+#property version   "3.16"
 #property strict
 
 enum ENUM_CYCLE
@@ -678,10 +678,36 @@ int BarsSinceRsiTrigger()
 //+------------------------------------------------------------------+
 bool IsEmaGraceWindowExpired()
   {
-   if(g_rsi_trigger_time == 0)
-      return (g_grace_remaining <= 0);
+   return (g_grace_remaining <= 0);
+  }
 
-   return (BarsSinceRsiTrigger() > InpEmaGraceBars);
+//+------------------------------------------------------------------+
+//| RSI 2차돌파 봉 포함, shift1 기준 남은 유예봉 (부트스트랩 전용)     |
+//| 유예구간 shift: [trigger-G+1 .. trigger] ∩ [1..]                   |
+//+------------------------------------------------------------------+
+void SyncGraceRemainingFromTrigger()
+  {
+   if(g_setup_phase != PHASE_WAIT_EMA || g_rsi_trigger_time == 0)
+      return;
+
+   int trigger_shift = iBarShift(TradeSymbol(), Period(), g_rsi_trigger_time, true);
+   if(trigger_shift < 1)
+     {
+      ExpireEmaGraceWindow();
+      return;
+     }
+
+   int first_grace_shift = trigger_shift - InpEmaGraceBars + 1;
+   if(first_grace_shift < 1)
+      first_grace_shift = 1;
+
+   if(1 < first_grace_shift)
+     {
+      ExpireEmaGraceWindow();
+      return;
+     }
+
+   g_grace_remaining = trigger_shift - first_grace_shift + 1;
   }
 
 //+------------------------------------------------------------------+
@@ -866,11 +892,6 @@ void TrySellEntryAtShift(const int shift, const bool allow_open)
       ExpireEmaGraceWindow();
       return;
      }
-   if(allow_open && IsEmaGraceWindowExpired())
-     {
-      ExpireEmaGraceWindow();
-      return;
-     }
 
    bool entered = false;
    if(IsSellEmaConfirm(shift) && PassesRangeFilters(OP_SELL))
@@ -882,7 +903,7 @@ void TrySellEntryAtShift(const int shift, const bool allow_open)
    if(!entered)
      {
       g_grace_remaining--;
-      if(g_grace_remaining <= 0 || (allow_open && IsEmaGraceWindowExpired()))
+      if(g_grace_remaining <= 0)
          ExpireEmaGraceWindow();
      }
   }
@@ -904,11 +925,6 @@ void TryBuyEntryAtShift(const int shift, const bool allow_open)
       ExpireEmaGraceWindow();
       return;
      }
-   if(allow_open && IsEmaGraceWindowExpired())
-     {
-      ExpireEmaGraceWindow();
-      return;
-     }
 
    bool entered = false;
    if(IsBuyEmaConfirm(shift) && PassesRangeFilters(OP_BUY))
@@ -920,7 +936,7 @@ void TryBuyEntryAtShift(const int shift, const bool allow_open)
    if(!entered)
      {
       g_grace_remaining--;
-      if(g_grace_remaining <= 0 || (allow_open && IsEmaGraceWindowExpired()))
+      if(g_grace_remaining <= 0)
          ExpireEmaGraceWindow();
      }
   }
@@ -942,16 +958,12 @@ void ReplayCycleStateSinceCross(const int cross_shift)
         }
 
       if(g_cycle == CYCLE_SELL)
-        {
          ProcessSellRsiAtShift(shift);
-         TrySellEntryAtShift(shift, false);
-        }
       else if(g_cycle == CYCLE_BUY)
-        {
          ProcessBuyRsiAtShift(shift);
-         TryBuyEntryAtShift(shift, false);
-        }
      }
+
+   SyncGraceRemainingFromTrigger();
   }
 
 //+------------------------------------------------------------------+
@@ -1519,7 +1531,7 @@ void RenderChartDashboard(const datetime bar_time,
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_8 v3.15  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_8 v3.16  " + TradeSymbol() + " " + TimeframeLabel(),
                     clrGold);
    SetDashboardLine(line++,
                     "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
@@ -1527,7 +1539,7 @@ void RenderChartDashboard(const datetime bar_time,
    SetDashboardLine(line++,
                     StringFormat("사이클:%s  단계:%s  체결:%s",
                                  CycleLabel(), PhaseLabel(), PanelMark(g_entry_taken)),
-                    clrAqua);
+                    g_setup_phase == PHASE_SETUP_EXHAUSTED ? clrTomato : clrAqua);
    SetDashboardLine(line++,
                     StringFormat("설정 관찰:%d봉  유예:%d봉  RSI:%.0f/%.0f  EMA:%d/%d",
                                  InpObservationBars, InpEmaGraceBars,
@@ -1560,15 +1572,15 @@ void RenderChartDashboard(const datetime bar_time,
    if(g_cycle == CYCLE_BUY)
      {
       SetDashboardLine(line++,
-                       StringFormat("3 RSI%.0f하향 %s  현재%s (설정%.0f)",
+                       StringFormat("3 RSI%.0f하향돌파 %s  RSI%s (기준%.0f)",
                                     InpRsiLower, PanelMark(rsi48_dn_step1),
                                     rsi_val, InpRsiLower),
                        PanelResultColor(rsi48_dn_step1));
       SetDashboardLine(line++,
-                       StringFormat("4 RSI무장 %s", PanelMark(g_rsi_armed)),
-                       PanelResultColor(g_rsi_armed));
+                       StringFormat("4 RSI1차완료 %s", PanelMark(g_rsi_armed || g_rsi_to_ema_used)),
+                       PanelResultColor(g_rsi_armed || g_rsi_to_ema_used));
       SetDashboardLine(line++,
-                       StringFormat("5 RSI%.0f상향 %s  현재%s (설정%.0f)",
+                       StringFormat("5 RSI%.0f상향돌파 %s  RSI%s (기준%.0f)",
                                     InpRsiUpper, PanelMark(rsi52_up_step2),
                                     rsi_val, InpRsiUpper),
                        PanelResultColor(rsi52_up_step2));
@@ -1585,15 +1597,15 @@ void RenderChartDashboard(const datetime bar_time,
    else
      {
       SetDashboardLine(line++,
-                       StringFormat("3 RSI%.0f상향 %s  현재%s (설정%.0f)",
+                       StringFormat("3 RSI%.0f상향돌파 %s  RSI%s (기준%.0f)",
                                     InpRsiUpper, PanelMark(rsi52_up),
                                     rsi_val, InpRsiUpper),
                        PanelResultColor(rsi52_up));
       SetDashboardLine(line++,
-                       StringFormat("4 RSI무장 %s", PanelMark(g_rsi_armed)),
-                       PanelResultColor(g_rsi_armed));
+                       StringFormat("4 RSI1차완료 %s", PanelMark(g_rsi_armed || g_rsi_to_ema_used)),
+                       PanelResultColor(g_rsi_armed || g_rsi_to_ema_used));
       SetDashboardLine(line++,
-                       StringFormat("5 RSI%.0f하향 %s  현재%s (설정%.0f)",
+                       StringFormat("5 RSI%.0f하향돌파 %s  RSI%s (기준%.0f)",
                                     InpRsiLower, PanelMark(rsi48_dn),
                                     rsi_val, InpRsiLower),
                        PanelResultColor(rsi48_dn));
@@ -1655,9 +1667,14 @@ void RenderChartDashboard(const datetime bar_time,
                                     PanelMark(rng_pass)),
                        PanelResultColor(grace_ok && rng_pass));
 
+   string block = "";
+   if(g_setup_phase == PHASE_SETUP_EXHAUSTED)
+      block = "  차단:유예소진";
+   else if(g_setup_phase != PHASE_WAIT_EMA && g_cycle != CYCLE_NONE)
+      block = "  차단:RSI미완";
    SetDashboardLine(line++,
-                    StringFormat(">>> 진입가능 %s <<<",
-                                 PanelMark(entry_all && !has_pos)),
+                    StringFormat(">>> 진입가능 %s%s <<<",
+                                 PanelMark(entry_all && !has_pos), block),
                     PanelResultColor(entry_all && !has_pos));
 
    ChartRedraw();
@@ -2093,7 +2110,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.15 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.16 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
