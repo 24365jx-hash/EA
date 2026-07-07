@@ -3,7 +3,7 @@
 //| 9EMA first breakout + candle shape + RSI confirmation            |
 //+------------------------------------------------------------------+
 #property copyright "IDC_A"
-#property version   "2.00"
+#property version   "2.01"
 #property strict
 
 enum ENUM_LOT_MODE
@@ -48,6 +48,12 @@ string   g_trade_symbol      = "";
 int      g_broker_gmt_offset = 0;
 datetime g_broker_time       = 0;
 datetime g_last_bar_time     = 0;
+datetime g_panel_last_bar    = 0;
+datetime g_panel_last_clock  = 0;
+bool     g_panel_last_pos    = false;
+bool     g_panel_ready       = false;
+string   g_dash_text[22];
+color    g_dash_clr[22];
 
 //+------------------------------------------------------------------+
 string TradeSymbol()
@@ -963,20 +969,30 @@ string LotModeLabel()
 //+------------------------------------------------------------------+
 void ClearChartDashboard()
   {
-   Comment("");
-
    for(int i = ObjectsTotal() - 1; i >= 0; i--)
      {
       string name = ObjectName(i);
       if(StringFind(name, "IDCA_pnl_") == 0)
          ObjectDelete(name);
      }
+
+   for(int j = 0; j < 22; j++)
+     {
+      g_dash_text[j] = "";
+      g_dash_clr[j]  = clrNONE;
+     }
+
+   g_panel_ready = false;
   }
 
 //+------------------------------------------------------------------+
 bool SetDashboardLine(const int line_idx, const string text, const color clr)
   {
+   if(line_idx < 0 || line_idx >= 22)
+      return false;
+
    string name = "IDCA_pnl_" + IntegerToString(line_idx);
+   bool   changed = (g_dash_text[line_idx] != text || g_dash_clr[line_idx] != clr);
 
    if(ObjectFind(name) < 0)
      {
@@ -986,11 +1002,17 @@ bool SetDashboardLine(const int line_idx, const string text, const color clr)
       ObjectSet(name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
       ObjectSet(name, OBJPROP_SELECTABLE, false);
       ObjectSet(name, OBJPROP_HIDDEN, true);
+      changed = true;
      }
+
+   if(!changed)
+      return false;
 
    ObjectSetText(name, text, InpPanelFontSize, "Arial Bold", clr);
    ObjectSet(name, OBJPROP_XDISTANCE, 12);
    ObjectSet(name, OBJPROP_YDISTANCE, 16 + line_idx * (InpPanelFontSize + 6));
+   g_dash_text[line_idx] = text;
+   g_dash_clr[line_idx]  = clr;
    return true;
   }
 
@@ -1041,87 +1063,148 @@ void RenderChartDashboard(const datetime bar_time,
                           const bool has_pos)
   {
    const int PNL_LINE_COUNT = 21;
+   bool      any_changed  = false;
 
-   ClearChartDashboard();
    SetDashboardBackground(PNL_LINE_COUNT);
 
    int line = 0;
-   SetDashboardLine(line++,
-                    "IDC_A v2.00  " + TradeSymbol() + " M1",
-                    clrGold);
-   SetDashboardLine(line++,
-                    "브로커 " + FormatBrokerTime(g_broker_time) + "  " + BrokerOffsetLabel(),
-                    clrSilver);
-   SetDashboardLine(line++,
-                    "셋업봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
-                    clrWhite);
-   SetDashboardLine(line++,
-                    StringFormat("사이클:%s  랏:%s %.2f  SL:%dpt",
-                                 has_pos ? "진행중" : "대기",
-                                 LotModeLabel(), CalcTradeLots(), InpStopLossPoints),
-                    clrAqua);
-   SetDashboardLine(line++,
-                    StringFormat("설정 EMA:%d  RSI:%.0f/%.0f  Trail:%d/%d",
-                                 InpEmaPeriod, InpRsiUpper, InpRsiLower,
-                                 InpTrailingStartPts, InpTrailingStepPts),
-                    clrSilver);
-   SetDashboardLine(line++, "========================================", clrDimGray);
+   if(SetDashboardLine(line++,
+                      "IDC_A v2.01  " + TradeSymbol() + " M1",
+                      clrGold))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       "브로커 " + FormatBrokerTime(g_broker_time) + "  " + BrokerOffsetLabel(),
+                       clrSilver))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       "셋업봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
+                       clrWhite))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("사이클:%s  랏:%s %.2f  SL:%dpt",
+                                    has_pos ? "진행중" : "대기",
+                                    LotModeLabel(), CalcTradeLots(), InpStopLossPoints),
+                       clrAqua))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("설정 EMA:%d  RSI:%.0f/%.0f  Trail:%d/%d",
+                                    InpEmaPeriod, InpRsiUpper, InpRsiLower,
+                                    InpTrailingStartPts, InpTrailingStepPts),
+                       clrSilver))
+      any_changed = true;
+   if(SetDashboardLine(line++, "========================================", clrDimGray))
+      any_changed = true;
 
    string rsi_val = rsi_data ? DoubleToString(rsi_curr, 1) : "N/A";
 
-   SetDashboardLine(line++,
-                    StringFormat("SELL 1 직전봉>EMA %s", PanelMark(sell_prev_above)),
-                    PanelResultColor(sell_prev_above));
-   SetDashboardLine(line++,
-                    StringFormat("SELL 2 셋업<EMA %s", PanelMark(sell_setup_below)),
-                    PanelResultColor(sell_setup_below));
-   SetDashboardLine(line++,
-                    StringFormat("SELL 3 몸통>꼬리 %s", PanelMark(sell_body)),
-                    PanelResultColor(sell_body));
-   SetDashboardLine(line++,
-                    StringFormat("SELL 4 아랫<윗꼬리 %s", PanelMark(sell_wick)),
-                    PanelResultColor(sell_wick));
-   SetDashboardLine(line++,
-                    StringFormat("SELL 5 음봉 %s", PanelMark(sell_color)),
-                    PanelResultColor(sell_color));
-   SetDashboardLine(line++,
-                    StringFormat("SELL 6 RSI%.0f↓돌파/이탈 %s  RSI=%s",
-                                 InpRsiLower, PanelMark(sell_rsi), rsi_val),
-                    PanelResultColor(sell_rsi));
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 1 직전봉>EMA %s", PanelMark(sell_prev_above)),
+                       PanelResultColor(sell_prev_above)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 2 셋업<EMA %s", PanelMark(sell_setup_below)),
+                       PanelResultColor(sell_setup_below)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 3 몸통>꼬리 %s", PanelMark(sell_body)),
+                       PanelResultColor(sell_body)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 4 아랫<윗꼬리 %s", PanelMark(sell_wick)),
+                       PanelResultColor(sell_wick)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 5 음봉 %s", PanelMark(sell_color)),
+                       PanelResultColor(sell_color)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 6 RSI%.0f↓돌파/이탈 %s  RSI=%s",
+                                    InpRsiLower, PanelMark(sell_rsi), rsi_val),
+                       PanelResultColor(sell_rsi)))
+      any_changed = true;
 
-   SetDashboardLine(line++, "----------------------------------------", clrDimGray);
+   if(SetDashboardLine(line++, "----------------------------------------", clrDimGray))
+      any_changed = true;
 
-   SetDashboardLine(line++,
-                    StringFormat("BUY 1 직전봉<EMA %s", PanelMark(buy_prev_below)),
-                    PanelResultColor(buy_prev_below));
-   SetDashboardLine(line++,
-                    StringFormat("BUY 2 셋업>EMA %s", PanelMark(buy_setup_above)),
-                    PanelResultColor(buy_setup_above));
-   SetDashboardLine(line++,
-                    StringFormat("BUY 3 몸통>꼬리 %s", PanelMark(buy_body)),
-                    PanelResultColor(buy_body));
-   SetDashboardLine(line++,
-                    StringFormat("BUY 4 윗<아랫꼬리 %s", PanelMark(buy_wick)),
-                    PanelResultColor(buy_wick));
-   SetDashboardLine(line++,
-                    StringFormat("BUY 5 양봉 %s", PanelMark(buy_color)),
-                    PanelResultColor(buy_color));
-   SetDashboardLine(line++,
-                    StringFormat("BUY 6 RSI%.0f↑돌파/이탈 %s  RSI=%s",
-                                 InpRsiUpper, PanelMark(buy_rsi), rsi_val),
-                    PanelResultColor(buy_rsi));
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 1 직전봉<EMA %s", PanelMark(buy_prev_below)),
+                       PanelResultColor(buy_prev_below)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 2 셋업>EMA %s", PanelMark(buy_setup_above)),
+                       PanelResultColor(buy_setup_above)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 3 몸통>꼬리 %s", PanelMark(buy_body)),
+                       PanelResultColor(buy_body)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 4 윗<아랫꼬리 %s", PanelMark(buy_wick)),
+                       PanelResultColor(buy_wick)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 5 양봉 %s", PanelMark(buy_color)),
+                       PanelResultColor(buy_color)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 6 RSI%.0f↑돌파/이탈 %s  RSI=%s",
+                                    InpRsiUpper, PanelMark(buy_rsi), rsi_val),
+                       PanelResultColor(buy_rsi)))
+      any_changed = true;
 
-   SetDashboardLine(line++, "========================================", clrDimGray);
+   if(SetDashboardLine(line++, "========================================", clrDimGray))
+      any_changed = true;
 
    if(has_pos)
-      SetDashboardLine(line++, "포지션 보유중 - 사이클 진행", clrOrange);
+     {
+      if(SetDashboardLine(line++, "포지션 보유중 - 사이클 진행", clrOrange))
+         any_changed = true;
+     }
    else
-      SetDashboardLine(line++,
-                       StringFormat(">>> SELL %s  BUY %s <<<",
-                                    PanelMark(sell_all), PanelMark(buy_all)),
-                       PanelResultColor(sell_all || buy_all));
+     {
+      if(SetDashboardLine(line++,
+                          StringFormat(">>> SELL %s  BUY %s <<<",
+                                       PanelMark(sell_all), PanelMark(buy_all)),
+                          PanelResultColor(sell_all || buy_all)))
+         any_changed = true;
+     }
 
-   ChartRedraw();
+   g_panel_ready = true;
+
+   if(any_changed)
+      ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+void UpdateDashboardIfNeeded()
+  {
+   if(!InpDebugBarLog && !InpChartPanel)
+      return;
+
+   datetime bar_time = iTime(TradeSymbol(), Period(), 1);
+   if(bar_time == 0)
+      return;
+
+   bool has_pos = HasOpenPosition();
+   bool need    = false;
+
+   if(!g_panel_ready)
+      need = true;
+   if(bar_time != g_panel_last_bar)
+      need = true;
+   if(has_pos != g_panel_last_pos)
+      need = true;
+   if(g_broker_time != g_panel_last_clock)
+      need = true;
+
+   if(!need)
+      return;
+
+   g_panel_last_bar   = bar_time;
+   g_panel_last_pos   = has_pos;
+   g_panel_last_clock = g_broker_time;
+
+   UpdateBarConditionDisplay();
   }
 
 //+------------------------------------------------------------------+
@@ -1270,7 +1353,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_A init v2.00 | trade symbol=", g_trade_symbol,
+   Print("IDC_A init v2.01 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=M1",
          " | broker time=", FormatBrokerTime(g_broker_time),
@@ -1280,7 +1363,8 @@ int OnInit()
          " | freeze level pts=", DoubleToString(GetFreezeLevelPts(), 0));
 
    g_last_bar_time = iTime(TradeSymbol(), Period(), 0);
-   UpdateBarConditionDisplay();
+   g_panel_ready   = false;
+   UpdateDashboardIfNeeded();
 
    if(!InpChartPanel)
       ClearChartDashboard();
@@ -1302,7 +1386,7 @@ void OnTick()
    ManageTrailingStop();
 
    if(InpChartPanel || InpDebugBarLog)
-      UpdateBarConditionDisplay();
+      UpdateDashboardIfNeeded();
 
    if(!IsNewBar())
       return;
