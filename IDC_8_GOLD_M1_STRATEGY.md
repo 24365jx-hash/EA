@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.11
+## 원본 전략 자료 (Official Strategy Document) v3.13
 
 | 항목 | 내용 |
 |------|------|
@@ -80,7 +80,7 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 
 ---
 
-*EA: `IDC_8.mq4` v3.12 | 검증: `IDC_8_VERIFICATION_REPORT_v3.12.md`*
+*EA: `IDC_8.mq4` v3.13 | 검증: `IDC_8_VERIFICATION_REPORT_v3.13.md`*
 
 ## 변경 이력
 
@@ -89,3 +89,4 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 | v3.10 | **폐기** — ATR 배수를 파라미터에 사용 (사용자 불편) |
 | v3.11 | **도(°) 파라미터 복원**, ATR정규화 atan 각도 공식, 디폴트 78.7° |
 | v3.12 | 크로스 히스토리 부트스트랩 — 재부착 시 Cyc=NONE 수정, RSI/유예 리플레이 |
+| v3.13 | 관찰만료→Cyc=NONE, init 즉시처리, 진입락, 크로스중복리셋 방지, 리플레이 크로스봉 포함 |

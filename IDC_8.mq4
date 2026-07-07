@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.12"
+#property version   "3.13"
 #property strict
 
 enum ENUM_CYCLE
@@ -343,6 +343,16 @@ bool HasOpenPosition()
          return true;
      }
    return false;
+  }
+
+//+------------------------------------------------------------------+
+void ExpireObservationWindow()
+  {
+   g_cycle            = CYCLE_NONE;
+   g_cycle_start_time = 0;
+   g_entry_taken      = false;
+   g_rsi_to_ema_used  = false;
+   ResetSetupState();
   }
 
 //+------------------------------------------------------------------+
@@ -844,7 +854,7 @@ void TrySellEntryAtShift(const int shift, const bool allow_open)
       return;
    if(IsObservationWindowExpired())
      {
-      ResetSetupState();
+      ExpireObservationWindow();
       return;
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
@@ -882,7 +892,7 @@ void TryBuyEntryAtShift(const int shift, const bool allow_open)
       return;
    if(IsObservationWindowExpired())
      {
-      ResetSetupState();
+      ExpireObservationWindow();
       return;
      }
    if(g_setup_phase != PHASE_WAIT_EMA)
@@ -919,13 +929,13 @@ void ReplayCycleStateSinceCross(const int cross_shift)
    if(cross_shift < 1)
       return;
 
-   for(int shift = cross_shift - 1; shift >= 2; shift--)
+   for(int shift = cross_shift; shift >= 2; shift--)
      {
       if(g_entry_taken || g_setup_phase == PHASE_SETUP_EXHAUSTED)
          break;
       if(IsObservationWindowExpired())
         {
-         ResetSetupState();
+         ExpireObservationWindow();
          break;
         }
 
@@ -960,7 +970,11 @@ void BootstrapCycleFromHistory()
    ENUM_CYCLE found_cycle = CYCLE_NONE;
    int        cross_shift = FindMostRecentCrossShift(found_cycle);
    if(cross_shift < 1)
+     {
+      if(InpDebugBarLog)
+         Print("IDC_8|BOOT|NONE|no cross in ", InpObservationBars, " bars");
       return;
+     }
 
    datetime cross_time = iTime(TradeSymbol(), Period(), cross_shift);
    if(cross_time == 0)
@@ -968,6 +982,16 @@ void BootstrapCycleFromHistory()
 
    StartCycle(found_cycle, cross_time);
    ReplayCycleStateSinceCross(cross_shift);
+
+   if(g_cycle != CYCLE_NONE && IsObservationWindowExpired())
+     {
+      if(InpDebugBarLog)
+         Print("IDC_8|BOOT|SKIP|obs expired|cross_bar=",
+               TimeToString(cross_time, TIME_DATE | TIME_MINUTES),
+               "|shift=", cross_shift);
+      ExpireObservationWindow();
+      return;
+     }
 
    if(InpDebugBarLog)
       Print("IDC_8|BOOT|", CycleLabel(),
@@ -1015,23 +1039,20 @@ void DetectEmaCrossOnClosedBar()
    if(HasOpenPosition())
       return;
 
-   double fast_curr = 0.0, slow_curr = 0.0;
-   double fast_prev = 0.0, slow_prev = 0.0;
-
-   if(!GetEmaPair(1, fast_curr, slow_curr))
-      return;
-   if(!GetEmaPair(2, fast_prev, slow_prev))
-      return;
-
    datetime cross_time = iTime(TradeSymbol(), Period(), 1);
+   if(cross_time == 0)
+      return;
 
-   bool dead_cross   = (fast_prev >= slow_prev) && (fast_curr < slow_curr);
-   bool golden_cross = (fast_prev <= slow_prev) && (fast_curr > slow_curr);
-
-   if(dead_cross)
-      StartCycle(CYCLE_SELL, cross_time);
-   else if(golden_cross)
-      StartCycle(CYCLE_BUY, cross_time);
+   if(IsDeadCrossAtShift(1))
+     {
+      if(g_cycle_start_time != cross_time)
+         StartCycle(CYCLE_SELL, cross_time);
+     }
+   else if(IsGoldenCrossAtShift(1))
+     {
+      if(g_cycle_start_time != cross_time)
+         StartCycle(CYCLE_BUY, cross_time);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -1298,6 +1319,8 @@ bool OpenPositionAtSetupClose(const int order_type)
    color arrow = (order_type == OP_BUY) ? clrGreen : clrRed;
    int ticket  = -1;
 
+   g_entry_taken = true;
+
    for(int attempt = 0; attempt < 5; attempt++)
      {
       RefreshRates();
@@ -1315,11 +1338,11 @@ bool OpenPositionAtSetupClose(const int order_type)
 
    if(ticket < 0)
      {
+      g_entry_taken = false;
       Print("IDC_8: OrderSend failed after retries. error=", GetLastError());
       return false;
      }
 
-   g_entry_taken = true;
    LogEntryDone(order_type, ticket);
 
    if(OrderSelect(ticket, SELECT_BY_TICKET))
@@ -1527,7 +1550,7 @@ void ProcessSetupLogicOnNewBar()
 
    if(IsObservationWindowExpired())
      {
-      ResetSetupState();
+      ExpireObservationWindow();
       return;
      }
 
@@ -1546,7 +1569,7 @@ void ProcessSetupLogicOnNewBar()
   }
 
 //+------------------------------------------------------------------+
-void ProcessEntryLogicOnNewBar()
+void ProcessClosedBarEntryPipeline()
   {
    BootstrapCycleFromHistory();
    DetectEmaCrossOnClosedBar();
@@ -1563,6 +1586,12 @@ void ProcessEntryLogicOnNewBar()
 
    if(g_cycle == CYCLE_NONE && InpDebugBarLog)
       LogBarFilterStatus();
+  }
+
+//+------------------------------------------------------------------+
+void ProcessEntryLogicOnNewBar()
+  {
+   ProcessClosedBarEntryPipeline();
   }
 
 //+------------------------------------------------------------------+
@@ -1748,7 +1777,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.12 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.13 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
@@ -1759,7 +1788,7 @@ int OnInit()
    g_last_bar_time = iTime(TradeSymbol(), Period(), 0);
    ResetCycleState();
    SyncEntryTakenFromOpenPosition();
-   BootstrapCycleFromHistory();
+   ProcessClosedBarEntryPipeline();
 
    return INIT_SUCCEEDED;
   }
