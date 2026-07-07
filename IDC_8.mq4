@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.14"
+#property version   "3.15"
 #property strict
 
 enum ENUM_CYCLE
@@ -58,8 +58,9 @@ input int    InpSlippagePts  = 30;
 input string InpTradeComment = "IDC_8";
 
 //--- Debug / display
-input bool InpDebugBarLog = false;  // Experts tab per-bar O/X log
-input bool InpChartPanel  = true;   // Chart left panel: per-bar entry conditions
+input bool InpDebugBarLog  = false; // Experts tab per-bar O/X log
+input bool InpChartPanel   = true;  // Chart left dashboard (all conditions)
+input int  InpPanelFontSize = 13;   // Dashboard font size (8-16)
 
 string   g_trade_symbol      = "";
 int      g_broker_gmt_offset = 0;
@@ -1408,9 +1409,258 @@ string OnOffLabel(const bool enabled)
   }
 
 //+------------------------------------------------------------------+
-string PanelOx(const bool ok)
+color PanelResultColor(const bool ok)
   {
-   return ok ? "O" : "X";
+   return ok ? clrLime : clrTomato;
+  }
+
+//+------------------------------------------------------------------+
+string PanelMark(const bool ok)
+  {
+   return ok ? "[O]" : "[X]";
+  }
+
+//+------------------------------------------------------------------+
+void ClearChartDashboard()
+  {
+   Comment("");
+
+   for(int i = ObjectsTotal() - 1; i >= 0; i--)
+     {
+      string name = ObjectName(i);
+      if(StringFind(name, "IDC8pnl_") == 0)
+         ObjectDelete(name);
+     }
+  }
+
+//+------------------------------------------------------------------+
+bool SetDashboardLine(const int line_idx, const string text, const color clr)
+  {
+   string name = "IDC8pnl_" + IntegerToString(line_idx);
+
+   if(ObjectFind(name) < 0)
+     {
+      if(!ObjectCreate(name, OBJ_LABEL, 0, 0, 0))
+         return false;
+      ObjectSet(name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSet(name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+      ObjectSet(name, OBJPROP_SELECTABLE, false);
+      ObjectSet(name, OBJPROP_HIDDEN, true);
+     }
+
+   ObjectSetText(name, text, InpPanelFontSize, "Arial Bold", clr);
+   ObjectSet(name, OBJPROP_XDISTANCE, 12);
+   ObjectSet(name, OBJPROP_YDISTANCE, 16 + line_idx * (InpPanelFontSize + 6));
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+void SetDashboardBackground(const int line_count)
+  {
+   string name = "IDC8pnl_bg";
+   int      h    = (InpPanelFontSize + 6) * line_count + 14;
+   int      w    = 560;
+
+   if(ObjectFind(name) < 0)
+     {
+      ObjectCreate(name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSet(name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSet(name, OBJPROP_SELECTABLE, false);
+      ObjectSet(name, OBJPROP_HIDDEN, true);
+      ObjectSet(name, OBJPROP_BACK, false);
+     }
+
+   ObjectSet(name, OBJPROP_XDISTANCE, 6);
+   ObjectSet(name, OBJPROP_YDISTANCE, 8);
+   ObjectSet(name, OBJPROP_XSIZE, w);
+   ObjectSet(name, OBJPROP_YSIZE, h);
+   ObjectSet(name, OBJPROP_BGCOLOR, C'16,18,28');
+   ObjectSet(name, OBJPROP_COLOR, C'70,80,110');
+   ObjectSet(name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSet(name, OBJPROP_WIDTH, 2);
+  }
+
+//+------------------------------------------------------------------+
+void RenderChartDashboard(const datetime bar_time,
+                          const bool dead_cross,
+                          const bool golden_cross,
+                          const bool rsi_ok,
+                          const double rsi_curr,
+                          const bool rsi52_up,
+                          const bool rsi48_dn,
+                          const bool rsi48_dn_step1,
+                          const bool rsi52_up_step2,
+                          const bool sell_br,
+                          const bool sell_cl,
+                          const bool sell_bd,
+                          const bool sell_all,
+                          const bool buy_br,
+                          const bool buy_cl,
+                          const bool buy_bd,
+                          const bool buy_all,
+                          const bool sep_data,
+                          const double sep_pts,
+                          const bool sep_pass,
+                          const bool ang_data,
+                          const double angle_deg,
+                          const bool ang_sell_pass,
+                          const bool ang_buy_pass,
+                          const bool obs_ok,
+                          const int obs_left,
+                          const bool grace_ok,
+                          const bool rng_pass,
+                          const bool entry_all,
+                          const bool has_pos)
+  {
+   const int PNL_LINE_COUNT = 18;
+
+   ClearChartDashboard();
+   SetDashboardBackground(PNL_LINE_COUNT);
+
+   int line = 0;
+   SetDashboardLine(line++,
+                    "IDC_8 v3.15  " + TradeSymbol() + " " + TimeframeLabel(),
+                    clrGold);
+   SetDashboardLine(line++,
+                    "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
+                    clrWhite);
+   SetDashboardLine(line++,
+                    StringFormat("사이클:%s  단계:%s  체결:%s",
+                                 CycleLabel(), PhaseLabel(), PanelMark(g_entry_taken)),
+                    clrAqua);
+   SetDashboardLine(line++,
+                    StringFormat("설정 관찰:%d봉  유예:%d봉  RSI:%.0f/%.0f  EMA:%d/%d",
+                                 InpObservationBars, InpEmaGraceBars,
+                                 InpRsiUpper, InpRsiLower,
+                                 InpFastEmaPeriod, InpSlowEmaPeriod),
+                    clrSilver);
+   SetDashboardLine(line++, "========================================", clrDimGray);
+
+   bool cross_sell = (g_cycle == CYCLE_SELL) || (g_cycle == CYCLE_NONE && dead_cross);
+   bool cross_buy  = (g_cycle == CYCLE_BUY)  || (g_cycle == CYCLE_NONE && golden_cross);
+   SetDashboardLine(line++,
+                    StringFormat("1 데드크로스(%d/%d) %s   골든 %s",
+                                 InpFastEmaPeriod, InpSlowEmaPeriod,
+                                 PanelMark(cross_sell || dead_cross),
+                                 PanelMark(cross_buy || golden_cross)),
+                    PanelResultColor(dead_cross || golden_cross || g_cycle != CYCLE_NONE));
+
+   if(g_cycle == CYCLE_NONE)
+      SetDashboardLine(line++,
+                       StringFormat("2 관찰N봉 %s  (-- / 설정%d봉)",
+                                    PanelMark(false), InpObservationBars),
+                       clrSilver);
+   else
+      SetDashboardLine(line++,
+                       StringFormat("2 관찰N봉 %s  (잔여%d / 설정%d봉)",
+                                    PanelMark(obs_ok), obs_left, InpObservationBars),
+                       PanelResultColor(obs_ok));
+
+   string rsi_val = rsi_ok ? DoubleToString(rsi_curr, 1) : "N/A";
+   if(g_cycle == CYCLE_BUY)
+     {
+      SetDashboardLine(line++,
+                       StringFormat("3 RSI%.0f하향 %s  현재%s (설정%.0f)",
+                                    InpRsiLower, PanelMark(rsi48_dn_step1),
+                                    rsi_val, InpRsiLower),
+                       PanelResultColor(rsi48_dn_step1));
+      SetDashboardLine(line++,
+                       StringFormat("4 RSI무장 %s", PanelMark(g_rsi_armed)),
+                       PanelResultColor(g_rsi_armed));
+      SetDashboardLine(line++,
+                       StringFormat("5 RSI%.0f상향 %s  현재%s (설정%.0f)",
+                                    InpRsiUpper, PanelMark(rsi52_up_step2),
+                                    rsi_val, InpRsiUpper),
+                       PanelResultColor(rsi52_up_step2));
+      SetDashboardLine(line++,
+                       StringFormat("6 9EMA돌파 %s  (high>9EMA)", PanelMark(buy_br)),
+                       PanelResultColor(buy_br));
+      SetDashboardLine(line++,
+                       StringFormat("7 9EMA종가 %s  (종가>9EMA)", PanelMark(buy_cl)),
+                       PanelResultColor(buy_cl));
+      SetDashboardLine(line++,
+                       StringFormat("8 몸통>꼬리 %s", PanelMark(buy_bd)),
+                       PanelResultColor(buy_bd));
+     }
+   else
+     {
+      SetDashboardLine(line++,
+                       StringFormat("3 RSI%.0f상향 %s  현재%s (설정%.0f)",
+                                    InpRsiUpper, PanelMark(rsi52_up),
+                                    rsi_val, InpRsiUpper),
+                       PanelResultColor(rsi52_up));
+      SetDashboardLine(line++,
+                       StringFormat("4 RSI무장 %s", PanelMark(g_rsi_armed)),
+                       PanelResultColor(g_rsi_armed));
+      SetDashboardLine(line++,
+                       StringFormat("5 RSI%.0f하향 %s  현재%s (설정%.0f)",
+                                    InpRsiLower, PanelMark(rsi48_dn),
+                                    rsi_val, InpRsiLower),
+                       PanelResultColor(rsi48_dn));
+      SetDashboardLine(line++,
+                       StringFormat("6 9EMA돌파 %s  (low<9EMA)", PanelMark(sell_br)),
+                       PanelResultColor(sell_br));
+      SetDashboardLine(line++,
+                       StringFormat("7 9EMA종가 %s  (종가<9EMA)", PanelMark(sell_cl)),
+                       PanelResultColor(sell_cl));
+      SetDashboardLine(line++,
+                       StringFormat("8 몸통>꼬리 %s", PanelMark(sell_bd)),
+                       PanelResultColor(sell_bd));
+     }
+
+   if(!InpUseEmaSepFilter || InpMinEmaSepPts <= 0)
+      SetDashboardLine(line++,
+                       StringFormat("9 EMA이격 [%s]  SKIP", OnOffLabel(InpUseEmaSepFilter)),
+                       clrSilver);
+   else
+      SetDashboardLine(line++,
+                       StringFormat("9 EMA이격 [%s] %s  %.0fpt (설정%dpt)",
+                                    OnOffLabel(true), PanelMark(sep_pass && sep_data),
+                                    sep_pts, InpMinEmaSepPts),
+                       PanelResultColor(sep_pass && sep_data));
+
+   if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
+      SetDashboardLine(line++,
+                       StringFormat("10 %dEMA각도 [%s]  SKIP",
+                                    InpAngleEmaPeriod, OnOffLabel(InpUseEmaAngleFilter)),
+                       clrSilver);
+   else if(ang_data)
+      SetDashboardLine(line++,
+                       StringFormat("10 %dEMA각도 [%s]  %.1f도 (설정%.1f도)  SELL %s  BUY %s",
+                                    InpAngleEmaPeriod, OnOffLabel(true),
+                                    angle_deg, InpMinAngleDeg,
+                                    PanelMark(ang_sell_pass), PanelMark(ang_buy_pass)),
+                       PanelResultColor(ang_sell_pass || ang_buy_pass));
+   else
+      SetDashboardLine(line++,
+                       StringFormat("10 %dEMA각도 [%s]  N/A (설정%.1f도)  SELL %s  BUY %s",
+                                    InpAngleEmaPeriod, OnOffLabel(true), InpMinAngleDeg,
+                                    PanelMark(false), PanelMark(false)),
+                       clrTomato);
+
+   SetDashboardLine(line++, "========================================", clrDimGray);
+
+   if(has_pos)
+      SetDashboardLine(line++, "포지션 보유중 - 신규진입 없음", clrOrange);
+   else if(g_cycle == CYCLE_NONE)
+      SetDashboardLine(line++,
+                       StringFormat("유예:--  9EMA:%s  필터:%s",
+                                    PanelMark(false), PanelMark(sep_pass && (ang_sell_pass || ang_buy_pass))),
+                       clrSilver);
+   else
+      SetDashboardLine(line++,
+                       StringFormat("유예 %d봉 [%s]  9EMA %s  필터 %s",
+                                    g_grace_remaining, PanelMark(grace_ok),
+                                    PanelMark(g_cycle == CYCLE_SELL ? sell_all : buy_all),
+                                    PanelMark(rng_pass)),
+                       PanelResultColor(grace_ok && rng_pass));
+
+   SetDashboardLine(line++,
+                    StringFormat(">>> 진입가능 %s <<<",
+                                 PanelMark(entry_all && !has_pos)),
+                    PanelResultColor(entry_all && !has_pos));
+
+   ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
@@ -1456,6 +1706,24 @@ void UpdateBarConditionDisplay()
    bool   sep_data  = GetEmaSeparationPts(sep_pts);
    bool   ang_data  = GetEma34AngleDeg(InpAngleEmaPeriod, InpAngleLookback, 1, angle_deg);
 
+   bool sell_br = IsSellEmaBreakthrough(1);
+   bool sell_cl = IsSellEmaCloseBelow(1);
+   bool sell_bd = IsBodyDominant(1);
+   bool sell_all = IsSellEmaConfirm(1);
+   bool buy_br  = IsBuyEmaBreakthrough(1);
+   bool buy_cl  = IsBuyEmaCloseAbove(1);
+   bool buy_bd  = IsBodyDominant(1);
+   bool buy_all = IsBuyEmaConfirm(1);
+
+   bool sep_pass_raw = (!InpUseEmaSepFilter || InpMinEmaSepPts <= 0) ? true : (sep_data && sep_pts >= InpMinEmaSepPts);
+   bool ang_sell_pass = false;
+   bool ang_buy_pass  = false;
+   if(ang_data)
+     {
+      ang_sell_pass = (!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0) ? true : (angle_deg <= -InpMinAngleDeg);
+      ang_buy_pass  = (!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0) ? true : (angle_deg >= InpMinAngleDeg);
+     }
+
    if(g_cycle == CYCLE_SELL)
      {
       order_type = OP_SELL;
@@ -1495,33 +1763,35 @@ void UpdateBarConditionDisplay()
       else if(g_cycle == CYCLE_BUY)
          rsi_line = StringFormat("RSI48dn=%s RSIarmed=%s RSI52up=%s",
                                  Ox(rsi48_dn_step1), Ox(g_rsi_armed), Ox(rsi52_up_step2));
+      else
+         rsi_line = StringFormat("RSInow=%.1f RSI52up=%s RSI48dn=%s",
+                                 rsi_ok ? rsi_curr : 0.0, Ox(rsi52_up), Ox(rsi48_dn));
 
       string ema_line = "EMA=--";
-      if(g_cycle != CYCLE_NONE)
+      if(g_cycle == CYCLE_SELL)
          ema_line = StringFormat("EMAbreak=%s EMAclose=%s EMAbody=%s EMAall=%s",
-                                 Ox(ema_break), Ox(ema_close), Ox(ema_body), Ox(ema_all));
+                                 Ox(sell_br), Ox(sell_cl), Ox(sell_bd), Ox(sell_all));
+      else if(g_cycle == CYCLE_BUY)
+         ema_line = StringFormat("EMAbreak=%s EMAclose=%s EMAbody=%s EMAall=%s",
+                                 Ox(buy_br), Ox(buy_cl), Ox(buy_bd), Ox(buy_all));
+      else
+         ema_line = StringFormat("EMAsell=%s EMAbuy=%s", Ox(sell_all), Ox(buy_all));
 
       string sep_line = "Sep=--";
-      if(g_cycle != CYCLE_NONE)
-        {
-         if(!InpUseEmaSepFilter || InpMinEmaSepPts <= 0)
-            sep_line = "Sep=SKIP";
-         else
-            sep_line = StringFormat("Sep=%s(%.0f>=%d)", Ox(sep_pass && sep_data), sep_pts, InpMinEmaSepPts);
-        }
+      if(!InpUseEmaSepFilter || InpMinEmaSepPts <= 0)
+         sep_line = "Sep=SKIP";
+      else
+         sep_line = StringFormat("Sep=%s(%.0f>=%d)", Ox(sep_pass_raw), sep_pts, InpMinEmaSepPts);
 
       string ang_line = "Ang=--";
-      if(g_cycle != CYCLE_NONE)
-        {
-         if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
-            ang_line = "Ang=SKIP";
-         else if(g_cycle == CYCLE_SELL)
-            ang_line = StringFormat("Ang34=%s(%.1f<=-%.1f)",
-                                    Ox(ang_pass && ang_data), angle_deg, InpMinAngleDeg);
-         else
-            ang_line = StringFormat("Ang34=%s(%.1f>=%.1f)",
-                                    Ox(ang_pass && ang_data), angle_deg, InpMinAngleDeg);
-        }
+      if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
+         ang_line = "Ang=SKIP";
+      else if(ang_data)
+         ang_line = StringFormat("Ang%d=%.1f|SELL<=-%.1f:%s|BUY>=%.1f:%s",
+                                 InpAngleEmaPeriod, angle_deg, InpMinAngleDeg,
+                                 Ox(ang_sell_pass), InpMinAngleDeg, Ox(ang_buy_pass));
+      else
+         ang_line = StringFormat("Ang%d=N/A(set%.1f)", InpAngleEmaPeriod, InpMinAngleDeg);
 
       Print("IDC_8|BAR|", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
             "|Cyc=", CycleLabel(),
@@ -1539,118 +1809,20 @@ void UpdateBarConditionDisplay()
      }
 
    if(!InpChartPanel)
+     {
+      ClearChartDashboard();
       return;
-
-   string panel = "";
-   panel += "IDC_8 v3.14 | " + TradeSymbol() + " " + TimeframeLabel() + "\n";
-   panel += "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES) + "\n";
-   panel += StringFormat("사이클:%s | 단계:%s | 체결:%s\n",
-                         CycleLabel(), PhaseLabel(), PanelOx(g_entry_taken));
-   panel += StringFormat("설정: 관찰%d봉 | 유예%d봉 | RSI%.0f/%.0f | EMA%d/%d\n",
-                         InpObservationBars, InpEmaGraceBars,
-                         InpRsiUpper, InpRsiLower,
-                         InpFastEmaPeriod, InpSlowEmaPeriod);
-   panel += "----------------------------------------\n";
-
-   if(has_pos)
-      panel += "포지션 보유중 - 신규 진입 대기\n";
-   else if(g_cycle == CYCLE_NONE)
-     {
-      if(dead_cross)
-         panel += StringFormat("① 데드크로스(9/%d)   O  (마감봉 감지)\n", InpSlowEmaPeriod);
-      else if(golden_cross)
-         panel += StringFormat("① 골든크로스(9/%d)  O  (마감봉 감지)\n", InpSlowEmaPeriod);
-      else
-         panel += StringFormat("① EMA크로스(9/%d)   X  (대기중)\n", InpSlowEmaPeriod);
-      panel += "②~⑩ 진입조건  --  (크로스 후 표시)\n";
-     }
-   else if(g_cycle == CYCLE_SELL)
-     {
-      panel += StringFormat("① 데드크로스(9/%d)   %s\n",
-                            InpSlowEmaPeriod, PanelOx(true));
-      panel += StringFormat("② 관찰N봉           %s  (잔여%d/%d봉)\n",
-                            PanelOx(obs_ok), obs_left, InpObservationBars);
-      if(rsi_ok)
-         panel += StringFormat("③ RSI%.0f상향돌파      %s  (%.1f / 설정%.0f)\n",
-                               InpRsiUpper, PanelOx(rsi52_up), rsi_curr, InpRsiUpper);
-      else
-         panel += StringFormat("③ RSI%.0f상향돌파      X  (데이터없음)\n", InpRsiUpper);
-      panel += StringFormat("④ RSI 1차무장         %s\n", PanelOx(g_rsi_armed));
-      if(rsi_ok)
-         panel += StringFormat("⑤ RSI%.0f하향돌파      %s  (%.1f / 설정%.0f)\n",
-                               InpRsiLower, PanelOx(rsi48_dn), rsi_curr, InpRsiLower);
-      else
-         panel += StringFormat("⑤ RSI%.0f하향돌파      X  (데이터없음)\n", InpRsiLower);
-      panel += StringFormat("⑥ 9EMA 하향돌파       %s  (low<9EMA)\n", PanelOx(ema_break));
-      panel += StringFormat("⑦ 9EMA 종가아래       %s\n", PanelOx(ema_close));
-      panel += StringFormat("⑧ 몸통>꼬리           %s\n", PanelOx(ema_body));
-      if(!InpUseEmaSepFilter || InpMinEmaSepPts <= 0)
-         panel += StringFormat("⑨ EMA이격 [%s]       -- SKIP\n", OnOffLabel(InpUseEmaSepFilter));
-      else
-         panel += StringFormat("⑨ EMA이격 [%s]       %s  (%.0fpt / 설정%dpt)\n",
-                               OnOffLabel(true), PanelOx(sep_pass && sep_data),
-                               sep_pts, InpMinEmaSepPts);
-      if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
-         panel += StringFormat("⑩ %dEMA각도 [%s]     -- SKIP\n",
-                               InpAngleEmaPeriod, OnOffLabel(InpUseEmaAngleFilter));
-      else if(ang_data)
-         panel += StringFormat("⑩ %dEMA각도 [%s]     %s  (%.1f° / 설정-%.1f°)\n",
-                               InpAngleEmaPeriod, OnOffLabel(true),
-                               PanelOx(ang_pass), angle_deg, InpMinAngleDeg);
-      else
-         panel += StringFormat("⑩ %dEMA각도 [%s]     X  (데이터없음 / 설정%.1f°)\n",
-                               InpAngleEmaPeriod, OnOffLabel(true), InpMinAngleDeg);
-     }
-   else if(g_cycle == CYCLE_BUY)
-     {
-      panel += StringFormat("① 골든크로스(9/%d)  %s\n",
-                            InpSlowEmaPeriod, PanelOx(true));
-      panel += StringFormat("② 관찰N봉           %s  (잔여%d/%d봉)\n",
-                            PanelOx(obs_ok), obs_left, InpObservationBars);
-      if(rsi_ok)
-         panel += StringFormat("③ RSI%.0f하향돌파      %s  (%.1f / 설정%.0f)\n",
-                               InpRsiLower, PanelOx(rsi48_dn_step1), rsi_curr, InpRsiLower);
-      else
-         panel += StringFormat("③ RSI%.0f하향돌파      X  (데이터없음)\n", InpRsiLower);
-      panel += StringFormat("④ RSI 1차무장         %s\n", PanelOx(g_rsi_armed));
-      if(rsi_ok)
-         panel += StringFormat("⑤ RSI%.0f상향돌파      %s  (%.1f / 설정%.0f)\n",
-                               InpRsiUpper, PanelOx(rsi52_up_step2), rsi_curr, InpRsiUpper);
-      else
-         panel += StringFormat("⑤ RSI%.0f상향돌파      X  (데이터없음)\n", InpRsiUpper);
-      panel += StringFormat("⑥ 9EMA 상향돌파       %s  (high>9EMA)\n", PanelOx(ema_break));
-      panel += StringFormat("⑦ 9EMA 종가위         %s\n", PanelOx(ema_close));
-      panel += StringFormat("⑧ 몸통>꼬리           %s\n", PanelOx(ema_body));
-      if(!InpUseEmaSepFilter || InpMinEmaSepPts <= 0)
-         panel += StringFormat("⑨ EMA이격 [%s]       -- SKIP\n", OnOffLabel(InpUseEmaSepFilter));
-      else
-         panel += StringFormat("⑨ EMA이격 [%s]       %s  (%.0fpt / 설정%dpt)\n",
-                               OnOffLabel(true), PanelOx(sep_pass && sep_data),
-                               sep_pts, InpMinEmaSepPts);
-      if(!InpUseEmaAngleFilter || InpMinAngleDeg <= 0.0)
-         panel += StringFormat("⑩ %dEMA각도 [%s]     -- SKIP\n",
-                               InpAngleEmaPeriod, OnOffLabel(InpUseEmaAngleFilter));
-      else if(ang_data)
-         panel += StringFormat("⑩ %dEMA각도 [%s]     %s  (%.1f° / 설정+%.1f°)\n",
-                               InpAngleEmaPeriod, OnOffLabel(true),
-                               PanelOx(ang_pass), angle_deg, InpMinAngleDeg);
-      else
-         panel += StringFormat("⑩ %dEMA각도 [%s]     X  (데이터없음 / 설정%.1f°)\n",
-                               InpAngleEmaPeriod, OnOffLabel(true), InpMinAngleDeg);
      }
 
-   panel += "----------------------------------------\n";
-   if(has_pos)
-      panel += "진입: -- | 유예: --\n";
-   else if(g_cycle == CYCLE_NONE)
-      panel += "진입: X | 유예: --\n";
-   else
-      panel += StringFormat("유예 %d봉 [%s] | 9EMA합격 %s | 필터합격 %s\n",
-                            g_grace_remaining, PanelOx(grace_ok),
-                            PanelOx(ema_all), PanelOx(rng_pass));
-   panel += StringFormat(">>> 진입가능 %s <<<\n", PanelOx(entry_all && !has_pos));
-
-   Comment(panel);
+   RenderChartDashboard(bar_time, dead_cross, golden_cross,
+                        rsi_ok, rsi_curr, rsi52_up, rsi48_dn,
+                        rsi48_dn_step1, rsi52_up_step2,
+                        sell_br, sell_cl, sell_bd, sell_all,
+                        buy_br, buy_cl, buy_bd, buy_all,
+                        sep_data, sep_pts, sep_pass_raw,
+                        ang_data, angle_deg, ang_sell_pass, ang_buy_pass,
+                        obs_ok, obs_left, grace_ok, rng_pass,
+                        entry_all, has_pos);
   }
 
 //+------------------------------------------------------------------+
@@ -1900,6 +2072,11 @@ bool ValidateInputs()
       Print("IDC_8: slippage points must be >= 0");
       return false;
      }
+   if(InpPanelFontSize < 8 || InpPanelFontSize > 16)
+     {
+      Print("IDC_8: panel font size must be 8-16");
+      return false;
+     }
    return true;
   }
 
@@ -1916,7 +2093,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.14 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.15 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
@@ -1930,7 +2107,7 @@ int OnInit()
    ProcessClosedBarEntryPipeline();
 
    if(!InpChartPanel)
-      Comment("");
+      ClearChartDashboard();
 
    return INIT_SUCCEEDED;
   }
@@ -1938,7 +2115,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   Comment("");
+   ClearChartDashboard();
   }
 
 //+------------------------------------------------------------------+

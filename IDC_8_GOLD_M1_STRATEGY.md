@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.14
+## 원본 전략 자료 (Official Strategy Document) v3.15
 
 | 항목 | 내용 |
 |------|------|
@@ -50,9 +50,9 @@ SL 셋업 종가 / TP 없음 / 트레일링 / SL=0 금지
 
 ---
 
-## 6. 파라미터 (24개)
+## 6. 파라미터 (25개)
 
-`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpUseEmaSepFilter`, `InpMinEmaSepPts`, `InpUseEmaAngleFilter`, `InpAngleEmaPeriod`, `InpAngleLookback`, **`InpMinAngleDeg` (도)**, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts`, `InpTradeComment`, `InpDebugBarLog`, **`InpChartPanel`**
+`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpUseEmaSepFilter`, `InpMinEmaSepPts`, `InpUseEmaAngleFilter`, `InpAngleEmaPeriod`, `InpAngleLookback`, **`InpMinAngleDeg` (도)**, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts`, `InpTradeComment`, `InpDebugBarLog`, **`InpChartPanel`**, **`InpPanelFontSize`**
 
 ---
 
@@ -76,18 +76,21 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 - BUY: angle ≥ +`InpMinAngleDeg`
 - 횡보: angle ≈ 0° → 차단
 
-### 8.3 디버그 / 차트 패널
+### 8.3 디버그 / 차트 대시보드
 
 | 파라미터 | 기본 | 설명 |
 |----------|------|------|
 | `InpDebugBarLog` | false | Experts 탭 매봉 O/X 로그 |
-| `InpChartPanel` | **true** | **차트 좌측 매봉 진입조건 패널** (실측값/설정값/O/X) |
+| `InpChartPanel` | **true** | 차트 좌측 대시보드 (OBJ 라벨, 어두운 배경) |
+| `InpPanelFontSize` | **13** | 대시보드 글자크기 (8~16) |
 
-패널 예시: `⑩ 34EMA각도 [ON]  X  (17.0° / 설정-78.7°)`
+- **사이클 NONE이어도 1~10번 전부 표시** (34EMA 각도 항상 표시)
+- 형식: `10 34EMA각도 [ON]  17.0도 (설정78.7도)  SELL [X]  BUY [X]`
+- `[O]`=초록 / `[X]`=빨강
 
 ---
 
-*EA: `IDC_8.mq4` v3.14 | 검증: `IDC_8_VERIFICATION_REPORT_v3.13.md`*
+*EA: `IDC_8.mq4` v3.15 | 검증: `IDC_8_VERIFICATION_REPORT_v3.13.md`*
 
 ## 변경 이력
 
@@ -98,3 +101,4 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 | v3.12 | 크로스 히스토리 부트스트랩 — 재부착 시 Cyc=NONE 수정, RSI/유예 리플레이 |
 | v3.13 | 관찰만료→Cyc=NONE, init 즉시처리, 진입락, 크로스중복리셋 방지, 리플레이 크로스봉 포함 |
 | v3.14 | 차트 좌측 매봉 진입조건 패널 (`InpChartPanel`) — 실측/설정/O/X 직관 표시 |
+| v3.15 | 대시보드 전면개편: OBJ라벨+배경, 34EMA각도 항상표시, NONE도 1~10 전부, `InpPanelFontSize` |
