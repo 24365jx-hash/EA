@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.18"
+#property version   "3.19"
 #property strict
 
 enum ENUM_CYCLE
@@ -465,29 +465,42 @@ bool IsRsiBreakoutBelowAtShift(const int shift, const double level)
   }
 
 //+------------------------------------------------------------------+
+//| 최신 48↓(shift 작을수록 최근) + 직전 52↑ — 셋업봉 놓침 방지            |
+//+------------------------------------------------------------------+
 bool ScanSellRsiSequence(const int cross_shift, int &arm_shift, int &trigger_shift)
   {
    arm_shift     = -1;
    trigger_shift = -1;
-   bool armed    = false;
 
-   for(int shift = cross_shift; shift >= 1; shift--)
+   for(int t = 1; t <= cross_shift; t++)
      {
-      if(!armed)
+      if(!IsRsiBreakoutBelowAtShift(t, InpRsiLower))
+         continue;
+
+      for(int a = t + 1; a <= cross_shift; a++)
         {
-         if(IsRsiBreakoutAboveAtShift(shift, InpRsiUpper))
+         if(IsRsiBreakoutAboveAtShift(a, InpRsiUpper))
            {
-            armed     = true;
-            arm_shift = shift;
-           }
-        }
-      else
-        {
-         if(IsRsiBreakoutBelowAtShift(shift, InpRsiLower))
-           {
-            trigger_shift = shift;
+            arm_shift     = a;
+            trigger_shift = t;
             return true;
            }
+        }
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool ScanSellRsiArmOnly(const int cross_shift, int &arm_shift)
+  {
+   arm_shift = -1;
+
+   for(int shift = 1; shift <= cross_shift; shift++)
+     {
+      if(IsRsiBreakoutAboveAtShift(shift, InpRsiUpper))
+        {
+         arm_shift = shift;
+         return true;
         }
      }
    return false;
@@ -498,25 +511,36 @@ bool ScanBuyRsiSequence(const int cross_shift, int &arm_shift, int &trigger_shif
   {
    arm_shift     = -1;
    trigger_shift = -1;
-   bool armed    = false;
 
-   for(int shift = cross_shift; shift >= 1; shift--)
+   for(int t = 1; t <= cross_shift; t++)
      {
-      if(!armed)
+      if(!IsRsiBreakoutAboveAtShift(t, InpRsiUpper))
+         continue;
+
+      for(int a = t + 1; a <= cross_shift; a++)
         {
-         if(IsRsiBreakoutBelowAtShift(shift, InpRsiLower))
+         if(IsRsiBreakoutBelowAtShift(a, InpRsiLower))
            {
-            armed     = true;
-            arm_shift = shift;
-           }
-        }
-      else
-        {
-         if(IsRsiBreakoutAboveAtShift(shift, InpRsiUpper))
-           {
-            trigger_shift = shift;
+            arm_shift     = a;
+            trigger_shift = t;
             return true;
            }
+        }
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool ScanBuyRsiArmOnly(const int cross_shift, int &arm_shift)
+  {
+   arm_shift = -1;
+
+   for(int shift = 1; shift <= cross_shift; shift++)
+     {
+      if(IsRsiBreakoutBelowAtShift(shift, InpRsiLower))
+        {
+         arm_shift = shift;
+         return true;
         }
      }
    return false;
@@ -581,7 +605,7 @@ void RebuildRsiStateFromHistory(const int cross_shift)
          g_rsi_arm_time = iTime(TradeSymbol(), Period(), arm_shift);
          BeginWaitEmaPhaseAtShift(trigger_shift);
         }
-      else if(arm_shift >= 1)
+      else if(ScanSellRsiArmOnly(cross_shift, arm_shift))
         {
          g_rsi_armed        = true;
          g_rsi_arm_time     = iTime(TradeSymbol(), Period(), arm_shift);
@@ -596,7 +620,7 @@ void RebuildRsiStateFromHistory(const int cross_shift)
          g_rsi_arm_time = iTime(TradeSymbol(), Period(), arm_shift);
          BeginWaitEmaPhaseAtShift(trigger_shift);
         }
-      else if(arm_shift >= 1)
+      else if(ScanBuyRsiArmOnly(cross_shift, arm_shift))
         {
          g_rsi_armed        = true;
          g_rsi_arm_time     = iTime(TradeSymbol(), Period(), arm_shift);
@@ -829,19 +853,6 @@ bool IsObservationWindowExpired()
   }
 
 //+------------------------------------------------------------------+
-int BarsSinceRsiTrigger()
-  {
-   if(g_rsi_trigger_time == 0)
-      return 2147483647;
-
-   int shift = iBarShift(TradeSymbol(), Period(), g_rsi_trigger_time, true);
-   if(shift < 0)
-      return 2147483647;
-
-   return shift;
-  }
-
-//+------------------------------------------------------------------+
 bool IsEmaGraceWindowExpired()
   {
    return (g_grace_remaining <= 0);
@@ -863,27 +874,21 @@ void SyncGraceRemainingFromTrigger()
       return;
      }
 
-   int first_grace_shift = trigger_shift - InpEmaGraceBars + 1;
-   if(first_grace_shift < 1)
-      first_grace_shift = 1;
-
-   if(1 < first_grace_shift)
+   int grace_left = InpEmaGraceBars - (trigger_shift - 1);
+   if(grace_left <= 0)
      {
       ExpireEmaGraceWindow();
       return;
      }
 
-   g_grace_remaining = trigger_shift - first_grace_shift + 1;
-  }
+   int remaining_obs = RemainingObservationBars();
+   if(remaining_obs <= 0)
+     {
+      ExpireEmaGraceWindow();
+      return;
+     }
 
-//+------------------------------------------------------------------+
-int CalcGraceBarsForTrigger()
-  {
-   int remaining = RemainingObservationBars();
-   if(remaining <= 0)
-      return 0;
-
-   return MathMin(InpEmaGraceBars, remaining);
+   g_grace_remaining = MathMin(grace_left, remaining_obs);
   }
 
 //+------------------------------------------------------------------+
@@ -984,19 +989,7 @@ bool BeginWaitEmaPhaseAtShift(const int trigger_shift)
    g_rsi_to_ema_used  = true;
    g_rsi_trigger_time = iTime(TradeSymbol(), Period(), trigger_shift);
 
-   int elapsed = 0;
-   if(g_cycle_start_time > 0)
-     {
-      int cross_shift = iBarShift(TradeSymbol(), Period(), g_cycle_start_time, true);
-      if(cross_shift >= 0)
-         elapsed = cross_shift - trigger_shift + 1;
-     }
-
-   int remaining_obs = InpObservationBars - elapsed + 1;
-   if(remaining_obs < 0)
-      remaining_obs = 0;
-
-   g_grace_remaining = MathMin(InpEmaGraceBars, remaining_obs);
+   SyncGraceRemainingFromTrigger();
 
    if(g_grace_remaining <= 0)
      {
@@ -1007,63 +1000,37 @@ bool BeginWaitEmaPhaseAtShift(const int trigger_shift)
   }
 
 //+------------------------------------------------------------------+
-void ProcessSellRsiAtShift(const int shift)
+int GetCycleCrossShift()
   {
-   if(g_setup_phase == PHASE_SETUP_EXHAUSTED)
-      return;
-   if(g_rsi_to_ema_used && g_setup_phase != PHASE_WAIT_EMA)
-      return;
+   if(g_cycle_start_time == 0)
+      return -1;
 
-   double rsi_curr = 0.0, rsi_prev = 0.0;
-   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
-      return;
+   int cross_shift = iBarShift(TradeSymbol(), Period(), g_cycle_start_time, true);
+   if(cross_shift < 1)
+      return -1;
 
-   if(!g_rsi_armed)
-     {
-      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
-        {
-         g_rsi_armed    = true;
-         g_rsi_arm_time = iTime(TradeSymbol(), Period(), shift);
-         if(g_setup_phase == PHASE_IDLE)
-            g_setup_phase = PHASE_WAIT_RSI_ARM;
-        }
-     }
-
-   if(g_rsi_armed && g_setup_phase != PHASE_WAIT_EMA)
-     {
-      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
-         BeginWaitEmaPhaseAtShift(shift);
-     }
+   return cross_shift;
   }
 
 //+------------------------------------------------------------------+
-void ProcessBuyRsiAtShift(const int shift)
+void SyncRsiStateFromHistory()
   {
+   if(g_cycle == CYCLE_NONE || g_entry_taken || HasOpenPosition())
+      return;
    if(g_setup_phase == PHASE_SETUP_EXHAUSTED)
       return;
-   if(g_rsi_to_ema_used && g_setup_phase != PHASE_WAIT_EMA)
+
+   int cross_shift = GetCycleCrossShift();
+   if(cross_shift < 1)
       return;
 
-   double rsi_curr = 0.0, rsi_prev = 0.0;
-   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
+   if(g_setup_phase == PHASE_WAIT_EMA)
+     {
+      SyncGraceRemainingFromTrigger();
       return;
-
-   if(!g_rsi_armed)
-     {
-      if(IsRsiBreakoutBelow(rsi_prev, rsi_curr, InpRsiLower))
-        {
-         g_rsi_armed    = true;
-         g_rsi_arm_time = iTime(TradeSymbol(), Period(), shift);
-         if(g_setup_phase == PHASE_IDLE)
-            g_setup_phase = PHASE_WAIT_RSI_ARM;
-        }
      }
 
-   if(g_rsi_armed && g_setup_phase != PHASE_WAIT_EMA)
-     {
-      if(IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper))
-         BeginWaitEmaPhaseAtShift(shift);
-     }
+   RebuildRsiStateFromHistory(cross_shift);
   }
 
 //+------------------------------------------------------------------+
@@ -1188,12 +1155,6 @@ void BootstrapCycleFromHistory()
   }
 
 //+------------------------------------------------------------------+
-bool BeginWaitEmaPhase()
-  {
-   return BeginWaitEmaPhaseAtShift(1);
-  }
-
-//+------------------------------------------------------------------+
 bool IsSetupEntryPermitted(const int order_type)
   {
    if(g_entry_taken)
@@ -1234,25 +1195,19 @@ void DetectEmaCrossOnClosedBar()
    if(IsDeadCrossAtShift(1))
      {
       if(g_cycle_start_time != cross_time)
+        {
          StartCycle(CYCLE_SELL, cross_time);
+         ReplayCycleStateSinceCross(1);
+        }
      }
    else if(IsGoldenCrossAtShift(1))
      {
       if(g_cycle_start_time != cross_time)
+        {
          StartCycle(CYCLE_BUY, cross_time);
+         ReplayCycleStateSinceCross(1);
+        }
      }
-  }
-
-//+------------------------------------------------------------------+
-void ProcessSellRsiOnClosedBar()
-  {
-   ProcessSellRsiAtShift(1);
-  }
-
-//+------------------------------------------------------------------+
-void ProcessBuyRsiOnClosedBar()
-  {
-   ProcessBuyRsiAtShift(1);
   }
 
 //+------------------------------------------------------------------+
@@ -1689,7 +1644,7 @@ void RenderChartDashboard(const datetime bar_time,
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_8 v3.18  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_8 v3.19  " + TradeSymbol() + " " + TimeframeLabel(),
                     clrGold);
    SetDashboardLine(line++,
                     "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
@@ -1867,6 +1822,30 @@ void UpdateBarConditionDisplay()
       rsi52_up_step2 = IsRsiBreakoutAbove(rsi_prev, rsi_curr, InpRsiUpper);
      }
 
+   if(g_rsi_arm_time > 0)
+     {
+      int arm_shift = iBarShift(TradeSymbol(), Period(), g_rsi_arm_time, true);
+      if(arm_shift >= 1)
+        {
+         if(g_cycle == CYCLE_SELL)
+            rsi52_up = IsRsiBreakoutAboveAtShift(arm_shift, InpRsiUpper);
+         else if(g_cycle == CYCLE_BUY)
+            rsi48_dn_step1 = IsRsiBreakoutBelowAtShift(arm_shift, InpRsiLower);
+        }
+     }
+
+   if(g_rsi_trigger_time > 0)
+     {
+      int trigger_shift = iBarShift(TradeSymbol(), Period(), g_rsi_trigger_time, true);
+      if(trigger_shift >= 1)
+        {
+         if(g_cycle == CYCLE_SELL)
+            rsi48_dn = IsRsiBreakoutBelowAtShift(trigger_shift, InpRsiLower);
+         else if(g_cycle == CYCLE_BUY)
+            rsi52_up_step2 = IsRsiBreakoutAboveAtShift(trigger_shift, InpRsiUpper);
+        }
+     }
+
    bool ema_break = false;
    bool ema_close = false;
    bool ema_body  = false;
@@ -2040,15 +2019,15 @@ void ProcessSetupLogicOnNewBar()
       return;
      }
 
+   SyncRsiStateFromHistory();
+
    if(g_cycle == CYCLE_SELL)
      {
-      ProcessSellRsiOnClosedBar();
       LogBarFilterStatus();
       TrySellEntryOnClosedBar();
      }
    else if(g_cycle == CYCLE_BUY)
      {
-      ProcessBuyRsiOnClosedBar();
       LogBarFilterStatus();
       TryBuyEntryOnClosedBar();
      }
@@ -2269,7 +2248,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.18 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.19 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
