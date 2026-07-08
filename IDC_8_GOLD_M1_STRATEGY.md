@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.16
+## 원본 전략 자료 (Official Strategy Document) v3.18
 
 | 항목 | 내용 |
 |------|------|
@@ -52,7 +52,7 @@ SL 셋업 종가 / TP 없음 / 트레일링 / SL=0 금지
 
 ## 6. 파라미터 (25개)
 
-`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpUseEmaSepFilter`, `InpMinEmaSepPts`, `InpUseEmaAngleFilter`, `InpAngleEmaPeriod`, `InpAngleLookback`, **`InpMinAngleDeg` (도)**, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts`, `InpTradeComment`, `InpDebugBarLog`, **`InpChartPanel`**, **`InpPanelFontSize`**
+`InpAutoDetectGold`, `InpManualSymbol`, `InpFastEmaPeriod`, `InpSlowEmaPeriod`, `InpRsiPeriod`, `InpRsiUpper`, `InpRsiLower`, `InpObservationBars`, `InpEmaGraceBars`, `InpUseEmaSepFilter`, `InpMinEmaSepPts`, `InpUseEmaAngleFilter`, `InpAngleEmaPeriod`, `InpAngleLookback`, **`InpMinAngleDeg` (도)**, `InpLots`, `InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`, `InpMagicNumber`, `InpSlippagePts` **(OrderSend 허용슬리피지, 진입조건 아님)**, `InpTradeComment`, `InpDebugBarLog`, **`InpChartPanel`**, **`InpPanelFontSize`**
 
 ---
 
@@ -90,7 +90,7 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 
 ---
 
-*EA: `IDC_8.mq4` v3.15 | 검증: `IDC_8_VERIFICATION_REPORT_v3.13.md`*
+*EA: `IDC_8.mq4` v3.18 | 검증: `IDC_8_VERIFICATION_REPORT_v3.18.md`*
 
 ## 변경 이력
 
@@ -103,3 +103,5 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 | v3.14 | 차트 좌측 매봉 진입조건 패널 (`InpChartPanel`) — 실측/설정/O/X 직관 표시 |
 | v3.15 | 대시보드 전면개편: OBJ라벨+배경, 34EMA각도 항상표시, NONE도 1~10 전부, `InpPanelFontSize` |
 | v3.16 | **유예버그 수정**: 리플레이 유예소모 제거, 이중만료 삭제, 첫셋업봉 진입 보장 |
+| v3.17 | RSI 48/52 돌파 락 — `VerifyRsiSequenceLocked`, 차트 마감봉 재검증 |
+| v3.18 | **원본 100%**: `InpSlippagePts` 진입차단 게이트 제거 — OrderSend 슬리피지만 사용 |

@@ -3,7 +3,7 @@
 //| EMA cross + RSI baseline breakout + fast EMA candle confirmation |
 //+------------------------------------------------------------------+
 #property copyright "IDC_8"
-#property version   "3.17"
+#property version   "3.18"
 #property strict
 
 enum ENUM_CYCLE
@@ -54,7 +54,7 @@ input int    InpTrailingStepPts  = 10;
 
 //--- Trade settings
 input int    InpMagicNumber  = 80008;
-input int    InpSlippagePts  = 30;
+input int    InpSlippagePts  = 30;  // OrderSend max slippage (pts) — not an entry filter
 input string InpTradeComment = "IDC_8";
 
 //--- Debug / display
@@ -1274,17 +1274,6 @@ double BuildInitialSL(const int order_type, const double reference_price)
   }
 
 //+------------------------------------------------------------------+
-bool IsEntrySlippageAcceptable(const int order_type, const double setup_close)
-  {
-   RefreshRates();
-
-   double market = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
-   double diff_pts = MathAbs(market - setup_close) / TradePoint();
-
-   return (diff_pts <= InpSlippagePts);
-  }
-
-//+------------------------------------------------------------------+
 double ClampStopLossForBroker(const int order_type, const double desired_sl)
   {
    if(desired_sl <= 0.0)
@@ -1483,13 +1472,6 @@ bool OpenPositionAtSetupClose(const int order_type)
 
    double setup_close = GetSetupClosePrice();
    double send_price  = (order_type == OP_BUY) ? TradeAsk() : TradeBid();
-
-   if(!IsEntrySlippageAcceptable(order_type, setup_close))
-     {
-      Print("IDC_8: entry skipped. setup close=", setup_close,
-            " market=", send_price, " max slippage pts=", InpSlippagePts);
-      return false;
-     }
 
    if(InpStopLossPoints <= 0)
      {
@@ -1707,7 +1689,7 @@ void RenderChartDashboard(const datetime bar_time,
 
    int line = 0;
    SetDashboardLine(line++,
-                    "IDC_8 v3.17  " + TradeSymbol() + " " + TimeframeLabel(),
+                    "IDC_8 v3.18  " + TradeSymbol() + " " + TimeframeLabel(),
                     clrGold);
    SetDashboardLine(line++,
                     "봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
@@ -2287,7 +2269,7 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_8 init v3.17 | trade symbol=", g_trade_symbol,
+   Print("IDC_8 init v3.18 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=", TimeframeLabel(), " (all TF supported, optimized for M1)",
          " | broker time=", FormatBrokerTime(g_broker_time),
