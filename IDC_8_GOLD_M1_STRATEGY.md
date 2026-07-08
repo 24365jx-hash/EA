@@ -1,5 +1,5 @@
 # IDC_8 — GOLD M1 SYSTEM
-## 원본 전략 자료 (Official Strategy Document) v3.19
+## 원본 전략 자료 (Official Strategy Document) v3.20
 
 | 항목 | 내용 |
 |------|------|
@@ -90,7 +90,7 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 
 ---
 
-*EA: `IDC_8.mq4` v3.19 | 검증: `IDC_8_VERIFICATION_REPORT_v3.19.md`*
+*EA: `IDC_8.mq4` v3.20 | 검증: `IDC_8_VERIFICATION_REPORT_v3.20.md`*
 
 ## 변경 이력
 
@@ -106,3 +106,4 @@ angle(°) = atan( (EMA34[1] − EMA34[1+N]) / ATR(N)[1] ) × 180 / π
 | v3.17 | RSI 48/52 돌파 락 — `VerifyRsiSequenceLocked`, 차트 마감봉 재검증 |
 | v3.18 | **원본 100%**: `InpSlippagePts` 진입차단 게이트 제거 — OrderSend 슬리피지만 사용 |
 | v3.19 | **셋업봉 미진입 수정**: 최신 RSI 스캔, 유예 계산, 매봉 상태동기화, 크로스 즉시 복원 |
+| v3.20 | **원본 RSI 순서 복원**: 크로스 후 시간순 첫 52↑→첫 48↓, 증분 RSI 복원, 매봉 rebuild 제거 |
