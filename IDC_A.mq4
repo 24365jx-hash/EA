@@ -3,13 +3,20 @@
 //| 9EMA first breakout + candle shape + RSI confirmation            |
 //+------------------------------------------------------------------+
 #property copyright "IDC_A"
-#property version   "2.01"
+#property version   "2.02"
 #property strict
 
 enum ENUM_LOT_MODE
   {
    LOT_MANUAL         = 0,
    LOT_AUTO_BALANCE   = 1
+  };
+
+enum ENUM_OBS_STATE
+  {
+   OBS_IDLE = 0,
+   OBS_SELL = 1,
+   OBS_BUY  = 2
   };
 
 //--- Symbol / broker
@@ -23,6 +30,10 @@ input int InpEmaPeriod = 9;              // Baseline EMA period
 input int    InpRsiPeriod = 14;
 input double InpRsiUpper  = 52.0;        // BUY RSI level
 input double InpRsiLower  = 48.0;        // SELL RSI level
+
+//--- Observation window (v2.02)
+input int InpWindowBars    = 5;          // Anchor-inclusive N-bar window
+input int InpMinEmaSepPts  = 100;        // 2~N setup: min EMA separation (points)
 
 //--- Lot sizing
 input ENUM_LOT_MODE InpLotMode          = LOT_MANUAL;
@@ -52,8 +63,11 @@ datetime g_panel_last_bar    = 0;
 datetime g_panel_last_clock  = 0;
 bool     g_panel_last_pos    = false;
 bool     g_panel_ready       = false;
-string   g_dash_text[22];
-color    g_dash_clr[22];
+string   g_dash_text[28];
+color    g_dash_clr[28];
+
+ENUM_OBS_STATE g_obs_state       = OBS_IDLE;
+datetime       g_obs_anchor_time  = 0;
 
 //+------------------------------------------------------------------+
 string TradeSymbol()
@@ -500,6 +514,242 @@ bool IsBullishCandle(const int shift)
    double open  = iOpen(TradeSymbol(), Period(), shift);
    double close = iClose(TradeSymbol(), Period(), shift);
    return (close > open);
+  }
+
+//+------------------------------------------------------------------+
+bool PassesSellEmaSeparation(const int shift)
+  {
+   if(InpMinEmaSepPts <= 0)
+      return true;
+
+   double ema = 0.0;
+   if(!GetEma(shift, ema))
+      return false;
+
+   double high = iHigh(TradeSymbol(), Period(), shift);
+   double sep  = (ema - high) / TradePoint();
+   return (sep >= (double)InpMinEmaSepPts);
+  }
+
+//+------------------------------------------------------------------+
+bool PassesBuyEmaSeparation(const int shift)
+  {
+   if(InpMinEmaSepPts <= 0)
+      return true;
+
+   double ema = 0.0;
+   if(!GetEma(shift, ema))
+      return false;
+
+   double low = iLow(TradeSymbol(), Period(), shift);
+   double sep = (low - ema) / TradePoint();
+   return (sep >= (double)InpMinEmaSepPts);
+  }
+
+//+------------------------------------------------------------------+
+bool IsSellAnchorAtShift(const int shift)
+  {
+   if(!IsSellEmaFirstBreakout(shift))
+      return false;
+   if(!IsBodyDominant(shift))
+      return false;
+   if(!IsSellWickShape(shift))
+      return false;
+   if(!IsBearishCandle(shift))
+      return false;
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
+      return false;
+
+   return IsSellRsiOk(rsi_prev, rsi_curr);
+  }
+
+//+------------------------------------------------------------------+
+bool IsBuyAnchorAtShift(const int shift)
+  {
+   if(!IsBuyEmaFirstBreakout(shift))
+      return false;
+   if(!IsBodyDominant(shift))
+      return false;
+   if(!IsBuyWickShape(shift))
+      return false;
+   if(!IsBullishCandle(shift))
+      return false;
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
+      return false;
+
+   return IsBuyRsiOk(rsi_prev, rsi_curr);
+  }
+
+//+------------------------------------------------------------------+
+bool IsSellEntryAtShift(const int shift)
+  {
+   if(!IsSetupCloseBelowEma(shift))
+      return false;
+   if(!IsBodyDominant(shift))
+      return false;
+   if(!IsSellWickShape(shift))
+      return false;
+   if(!IsBearishCandle(shift))
+      return false;
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
+      return false;
+   if(!IsSellRsiOk(rsi_prev, rsi_curr))
+      return false;
+
+   return PassesSellEmaSeparation(shift);
+  }
+
+//+------------------------------------------------------------------+
+bool IsBuyEntryAtShift(const int shift)
+  {
+   if(!IsSetupCloseAboveEma(shift))
+      return false;
+   if(!IsBodyDominant(shift))
+      return false;
+   if(!IsBuyWickShape(shift))
+      return false;
+   if(!IsBullishCandle(shift))
+      return false;
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   if(!GetRsiPair(shift, rsi_curr, rsi_prev))
+      return false;
+   if(!IsBuyRsiOk(rsi_prev, rsi_curr))
+      return false;
+
+   return PassesBuyEmaSeparation(shift);
+  }
+
+//+------------------------------------------------------------------+
+void ResetObservationWindow()
+  {
+   g_obs_state       = OBS_IDLE;
+   g_obs_anchor_time = 0;
+  }
+
+//+------------------------------------------------------------------+
+string ObsStateLabel()
+  {
+   if(g_obs_state == OBS_SELL)
+      return "SELL관찰";
+   if(g_obs_state == OBS_BUY)
+      return "BUY관찰";
+   return "대기";
+  }
+
+//+------------------------------------------------------------------+
+int ObservationBarsElapsed()
+  {
+   if(g_obs_anchor_time == 0)
+      return 0;
+
+   int shift = iBarShift(TradeSymbol(), Period(), g_obs_anchor_time, true);
+   if(shift < 0)
+      return 0;
+
+   return shift;
+  }
+
+//+------------------------------------------------------------------+
+bool EvaluateSellAnchor(const int setup_shift,
+                        bool &ema_ok,
+                        bool &body_ok,
+                        bool &wick_ok,
+                        bool &color_ok,
+                        bool &rsi_ok,
+                        bool &all_ok)
+  {
+   ema_ok  = IsSellEmaFirstBreakout(setup_shift);
+   body_ok = IsBodyDominant(setup_shift);
+   wick_ok = IsSellWickShape(setup_shift);
+   color_ok = IsBearishCandle(setup_shift);
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   rsi_ok = false;
+   if(GetRsiPair(setup_shift, rsi_curr, rsi_prev))
+      rsi_ok = IsSellRsiOk(rsi_prev, rsi_curr);
+
+   all_ok = (ema_ok && body_ok && wick_ok && color_ok && rsi_ok);
+   return all_ok;
+  }
+
+//+------------------------------------------------------------------+
+bool EvaluateBuyAnchor(const int setup_shift,
+                       bool &ema_ok,
+                       bool &body_ok,
+                       bool &wick_ok,
+                       bool &color_ok,
+                       bool &rsi_ok,
+                       bool &all_ok)
+  {
+   ema_ok  = IsBuyEmaFirstBreakout(setup_shift);
+   body_ok = IsBodyDominant(setup_shift);
+   wick_ok = IsBuyWickShape(setup_shift);
+   color_ok = IsBullishCandle(setup_shift);
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   rsi_ok = false;
+   if(GetRsiPair(setup_shift, rsi_curr, rsi_prev))
+      rsi_ok = IsBuyRsiOk(rsi_prev, rsi_curr);
+
+   all_ok = (ema_ok && body_ok && wick_ok && color_ok && rsi_ok);
+   return all_ok;
+  }
+
+//+------------------------------------------------------------------+
+bool EvaluateSellEntry(const int setup_shift,
+                       bool &ema_close_ok,
+                       bool &body_ok,
+                       bool &wick_ok,
+                       bool &color_ok,
+                       bool &rsi_ok,
+                       bool &sep_ok,
+                       bool &all_ok)
+  {
+   ema_close_ok = IsSetupCloseBelowEma(setup_shift);
+   body_ok      = IsBodyDominant(setup_shift);
+   wick_ok      = IsSellWickShape(setup_shift);
+   color_ok     = IsBearishCandle(setup_shift);
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   rsi_ok = false;
+   if(GetRsiPair(setup_shift, rsi_curr, rsi_prev))
+      rsi_ok = IsSellRsiOk(rsi_prev, rsi_curr);
+
+   sep_ok = PassesSellEmaSeparation(setup_shift);
+   all_ok = (ema_close_ok && body_ok && wick_ok && color_ok && rsi_ok && sep_ok);
+   return all_ok;
+  }
+
+//+------------------------------------------------------------------+
+bool EvaluateBuyEntry(const int setup_shift,
+                      bool &ema_close_ok,
+                      bool &body_ok,
+                      bool &wick_ok,
+                      bool &color_ok,
+                      bool &rsi_ok,
+                      bool &sep_ok,
+                      bool &all_ok)
+  {
+   ema_close_ok = IsSetupCloseAboveEma(setup_shift);
+   body_ok      = IsBodyDominant(setup_shift);
+   wick_ok      = IsBuyWickShape(setup_shift);
+   color_ok     = IsBullishCandle(setup_shift);
+
+   double rsi_curr = 0.0, rsi_prev = 0.0;
+   rsi_ok = false;
+   if(GetRsiPair(setup_shift, rsi_curr, rsi_prev))
+      rsi_ok = IsBuyRsiOk(rsi_prev, rsi_curr);
+
+   sep_ok = PassesBuyEmaSeparation(setup_shift);
+   all_ok = (ema_close_ok && body_ok && wick_ok && color_ok && rsi_ok && sep_ok);
+   return all_ok;
   }
 
 //+------------------------------------------------------------------+
@@ -976,7 +1226,7 @@ void ClearChartDashboard()
          ObjectDelete(name);
      }
 
-   for(int j = 0; j < 22; j++)
+   for(int j = 0; j < 28; j++)
      {
       g_dash_text[j] = "";
       g_dash_clr[j]  = clrNONE;
@@ -988,7 +1238,7 @@ void ClearChartDashboard()
 //+------------------------------------------------------------------+
 bool SetDashboardLine(const int line_idx, const string text, const color clr)
   {
-   if(line_idx < 0 || line_idx >= 22)
+   if(line_idx < 0 || line_idx >= 28)
       return false;
 
    string name = "IDCA_pnl_" + IntegerToString(line_idx);
@@ -1046,30 +1296,38 @@ void SetDashboardBackground(const int line_count)
 void RenderChartDashboard(const datetime bar_time,
                           const double rsi_curr,
                           const bool rsi_data,
+                          const bool sell_anchor_all,
+                          const bool sell_entry_all,
                           const bool sell_prev_above,
-                          const bool sell_setup_below,
+                          const bool sell_anchor_ema,
+                          const bool sell_entry_ema,
                           const bool sell_body,
                           const bool sell_wick,
                           const bool sell_color,
                           const bool sell_rsi,
-                          const bool sell_all,
+                          const bool sell_sep,
+                          const bool buy_anchor_all,
+                          const bool buy_entry_all,
                           const bool buy_prev_below,
-                          const bool buy_setup_above,
+                          const bool buy_anchor_ema,
+                          const bool buy_entry_ema,
                           const bool buy_body,
                           const bool buy_wick,
                           const bool buy_color,
                           const bool buy_rsi,
-                          const bool buy_all,
+                          const bool buy_sep,
                           const bool has_pos)
   {
-   const int PNL_LINE_COUNT = 21;
+   const int PNL_LINE_COUNT = 28;
    bool      any_changed  = false;
+   int       obs_elapsed  = ObservationBarsElapsed();
+   int       obs_remain   = (g_obs_state == OBS_IDLE) ? 0 : MathMax(0, InpWindowBars - obs_elapsed);
 
    SetDashboardBackground(PNL_LINE_COUNT);
 
    int line = 0;
    if(SetDashboardLine(line++,
-                      "IDC_A v2.01  " + TradeSymbol() + " M1",
+                      "IDC_A v2.02  " + TradeSymbol() + " M1",
                       clrGold))
       any_changed = true;
    if(SetDashboardLine(line++,
@@ -1079,6 +1337,11 @@ void RenderChartDashboard(const datetime bar_time,
    if(SetDashboardLine(line++,
                        "셋업봉 " + TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
                        clrWhite))
+      any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("관찰:%s  %d/%d  잔여:%d  EMA간격:%dpt",
+                                    ObsStateLabel(), obs_elapsed, InpWindowBars, obs_remain, InpMinEmaSepPts),
+                       clrAqua))
       any_changed = true;
    if(SetDashboardLine(line++,
                        StringFormat("사이클:%s  랏:%s %.2f  SL:%dpt",
@@ -1098,12 +1361,18 @@ void RenderChartDashboard(const datetime bar_time,
    string rsi_val = rsi_data ? DoubleToString(rsi_curr, 1) : "N/A";
 
    if(SetDashboardLine(line++,
+                       StringFormat("SELL 앵커 %s  진입 %s  (앵커봉 즉시진입 없음)",
+                                    PanelMark(sell_anchor_all), PanelMark(sell_entry_all)),
+                       PanelResultColor(sell_entry_all)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
                        StringFormat("SELL 1 직전봉>EMA %s", PanelMark(sell_prev_above)),
                        PanelResultColor(sell_prev_above)))
       any_changed = true;
    if(SetDashboardLine(line++,
-                       StringFormat("SELL 2 셋업<EMA %s", PanelMark(sell_setup_below)),
-                       PanelResultColor(sell_setup_below)))
+                       StringFormat("SELL 2 앵커<EMA %s  진입<EMA %s",
+                                    PanelMark(sell_anchor_ema), PanelMark(sell_entry_ema)),
+                       PanelResultColor(sell_entry_ema)))
       any_changed = true;
    if(SetDashboardLine(line++,
                        StringFormat("SELL 3 몸통>꼬리 %s", PanelMark(sell_body)),
@@ -1122,17 +1391,27 @@ void RenderChartDashboard(const datetime bar_time,
                                     InpRsiLower, PanelMark(sell_rsi), rsi_val),
                        PanelResultColor(sell_rsi)))
       any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("SELL 7 EMA간격(2~N만) %s", PanelMark(sell_sep)),
+                       PanelResultColor(sell_sep)))
+      any_changed = true;
 
    if(SetDashboardLine(line++, "----------------------------------------", clrDimGray))
       any_changed = true;
 
    if(SetDashboardLine(line++,
+                       StringFormat("BUY 앵커 %s  진입 %s  (앵커봉 즉시진입 없음)",
+                                    PanelMark(buy_anchor_all), PanelMark(buy_entry_all)),
+                       PanelResultColor(buy_entry_all)))
+      any_changed = true;
+   if(SetDashboardLine(line++,
                        StringFormat("BUY 1 직전봉<EMA %s", PanelMark(buy_prev_below)),
                        PanelResultColor(buy_prev_below)))
       any_changed = true;
    if(SetDashboardLine(line++,
-                       StringFormat("BUY 2 셋업>EMA %s", PanelMark(buy_setup_above)),
-                       PanelResultColor(buy_setup_above)))
+                       StringFormat("BUY 2 앵커>EMA %s  진입>EMA %s",
+                                    PanelMark(buy_anchor_ema), PanelMark(buy_entry_ema)),
+                       PanelResultColor(buy_entry_ema)))
       any_changed = true;
    if(SetDashboardLine(line++,
                        StringFormat("BUY 3 몸통>꼬리 %s", PanelMark(buy_body)),
@@ -1151,6 +1430,10 @@ void RenderChartDashboard(const datetime bar_time,
                                     InpRsiUpper, PanelMark(buy_rsi), rsi_val),
                        PanelResultColor(buy_rsi)))
       any_changed = true;
+   if(SetDashboardLine(line++,
+                       StringFormat("BUY 7 EMA간격(2~N만) %s", PanelMark(buy_sep)),
+                       PanelResultColor(buy_sep)))
+      any_changed = true;
 
    if(SetDashboardLine(line++, "========================================", clrDimGray))
       any_changed = true;
@@ -1160,12 +1443,20 @@ void RenderChartDashboard(const datetime bar_time,
       if(SetDashboardLine(line++, "포지션 보유중 - 사이클 진행", clrOrange))
          any_changed = true;
      }
+   else if(g_obs_state != OBS_IDLE)
+     {
+      if(SetDashboardLine(line++,
+                          StringFormat(">>> 관찰중 %s  bar2~%d 종가진입 <<<",
+                                       ObsStateLabel(), InpWindowBars),
+                          clrYellow))
+         any_changed = true;
+     }
    else
      {
       if(SetDashboardLine(line++,
-                          StringFormat(">>> SELL %s  BUY %s <<<",
-                                       PanelMark(sell_all), PanelMark(buy_all)),
-                          PanelResultColor(sell_all || buy_all)))
+                          StringFormat(">>> 앵커대기  SELL %s  BUY %s <<<",
+                                       PanelMark(sell_anchor_all), PanelMark(buy_anchor_all)),
+                          PanelResultColor(sell_anchor_all || buy_anchor_all)))
          any_changed = true;
      }
 
@@ -1217,16 +1508,18 @@ void UpdateBarConditionDisplay()
    if(bar_time == 0)
       return;
 
-   bool s_ema = false, s_body = false, s_wick = false, s_color = false, s_rsi = false, s_all = false;
-   bool b_ema = false, b_body = false, b_wick = false, b_color = false, b_rsi = false, b_all = false;
+   bool sa_ema = false, sa_body = false, sa_wick = false, sa_color = false, sa_rsi = false, sa_all = false;
+   bool se_ema = false, se_body = false, se_wick = false, se_color = false, se_rsi = false, se_sep = false, se_all = false;
+   bool ba_ema = false, ba_body = false, ba_wick = false, ba_color = false, ba_rsi = false, ba_all = false;
+   bool be_ema = false, be_body = false, be_wick = false, be_color = false, be_rsi = false, be_sep = false, be_all = false;
 
-   EvaluateSellSetup(1, s_ema, s_body, s_wick, s_color, s_rsi, s_all);
-   EvaluateBuySetup(1, b_ema, b_body, b_wick, b_color, b_rsi, b_all);
+   EvaluateSellAnchor(1, sa_ema, sa_body, sa_wick, sa_color, sa_rsi, sa_all);
+   EvaluateSellEntry(1, se_ema, se_body, se_wick, se_color, se_rsi, se_sep, se_all);
+   EvaluateBuyAnchor(1, ba_ema, ba_body, ba_wick, ba_color, ba_rsi, ba_all);
+   EvaluateBuyEntry(1, be_ema, be_body, be_wick, be_color, be_rsi, be_sep, be_all);
 
-   bool s_prev_above  = IsPrevCloseAboveEma(1);
-   bool s_setup_below = IsSetupCloseBelowEma(1);
-   bool b_prev_below  = IsPrevCloseBelowEma(1);
-   bool b_setup_above = IsSetupCloseAboveEma(1);
+   bool s_prev_above = IsPrevCloseAboveEma(1);
+   bool b_prev_below = IsPrevCloseBelowEma(1);
 
    double rsi_curr = 0.0, rsi_prev = 0.0;
    bool   rsi_data = GetRsiPair(1, rsi_curr, rsi_prev);
@@ -1239,10 +1532,9 @@ void UpdateBarConditionDisplay()
         {
          s_last_debug_bar = bar_time;
          Print("IDC_A|BAR|", TimeToString(bar_time, TIME_DATE | TIME_MINUTES),
-               "|SELL=", Ox(s_all),
-               "|EMA=", Ox(s_ema), "|BODY=", Ox(s_body), "|WICK=", Ox(s_wick),
-               "|COLOR=", Ox(s_color), "|RSI=", Ox(s_rsi),
-               "|BUY=", Ox(b_all),
+               "|OBS=", ObsStateLabel(), "|elapsed=", ObservationBarsElapsed(), "/", InpWindowBars,
+               "|SELL anchor=", Ox(sa_all), " entry=", Ox(se_all),
+               "|BUY anchor=", Ox(ba_all), " entry=", Ox(be_all),
                "|POS=", Ox(has_pos));
         }
      }
@@ -1254,29 +1546,97 @@ void UpdateBarConditionDisplay()
      }
 
    RenderChartDashboard(bar_time, rsi_curr, rsi_data,
-                        s_prev_above, s_setup_below, s_body, s_wick, s_color, s_rsi, s_all,
-                        b_prev_below, b_setup_above, b_body, b_wick, b_color, b_rsi, b_all,
+                        sa_all, se_all,
+                        s_prev_above, sa_ema, se_ema, sa_body, sa_wick, sa_color, sa_rsi, se_sep,
+                        ba_all, be_all,
+                        b_prev_below, ba_ema, be_ema, ba_body, ba_wick, ba_color, ba_rsi, be_sep,
                         has_pos);
   }
 
 //+------------------------------------------------------------------+
 void ProcessClosedBarEntry()
   {
-   const int SETUP_SHIFT = 1;
+   const int S = 1;
 
    if(HasOpenPosition())
+     {
+      ResetObservationWindow();
       return;
+     }
 
-   bool s_ema = false, s_body = false, s_wick = false, s_color = false, s_rsi = false, s_all = false;
-   bool b_ema = false, b_body = false, b_wick = false, b_color = false, b_rsi = false, b_all = false;
+   if(g_obs_state == OBS_IDLE)
+     {
+      if(IsSellAnchorAtShift(S))
+        {
+         g_obs_state       = OBS_SELL;
+         g_obs_anchor_time = iTime(TradeSymbol(), Period(), S);
+         if(InpDebugBarLog)
+            Print("IDC_A|OBS|SELL anchor bar=", TimeToString(g_obs_anchor_time, TIME_DATE | TIME_MINUTES));
+         return;
+        }
 
-   EvaluateSellSetup(SETUP_SHIFT, s_ema, s_body, s_wick, s_color, s_rsi, s_all);
-   EvaluateBuySetup(SETUP_SHIFT, b_ema, b_body, b_wick, b_color, b_rsi, b_all);
+      if(IsBuyAnchorAtShift(S))
+        {
+         g_obs_state       = OBS_BUY;
+         g_obs_anchor_time = iTime(TradeSymbol(), Period(), S);
+         if(InpDebugBarLog)
+            Print("IDC_A|OBS|BUY anchor bar=", TimeToString(g_obs_anchor_time, TIME_DATE | TIME_MINUTES));
+         return;
+        }
 
-   if(s_all)
-      OpenPositionAtSetupClose(OP_SELL);
-   else if(b_all)
-      OpenPositionAtSetupClose(OP_BUY);
+      return;
+     }
+
+   int bars_in = ObservationBarsElapsed();
+   if(bars_in <= 0)
+     {
+      ResetObservationWindow();
+      return;
+     }
+
+   if(bars_in > InpWindowBars)
+     {
+      if(InpDebugBarLog)
+         Print("IDC_A|OBS|window expired bars=", bars_in, "/", InpWindowBars);
+      ResetObservationWindow();
+      return;
+     }
+
+   if(g_obs_state == OBS_SELL)
+     {
+      if(!IsBearishCandle(S))
+        {
+         if(InpDebugBarLog)
+            Print("IDC_A|OBS|SELL window aborted - non-bearish bar");
+         ResetObservationWindow();
+         return;
+        }
+
+      if(bars_in >= 2 && IsSellEntryAtShift(S))
+        {
+         OpenPositionAtSetupClose(OP_SELL);
+         ResetObservationWindow();
+        }
+
+      return;
+     }
+
+   if(g_obs_state == OBS_BUY)
+     {
+      if(!IsBullishCandle(S))
+        {
+         if(InpDebugBarLog)
+            Print("IDC_A|OBS|BUY window aborted - non-bullish bar");
+         ResetObservationWindow();
+         return;
+        }
+
+      if(bars_in >= 2 && IsBuyEntryAtShift(S))
+        {
+         OpenPositionAtSetupClose(OP_BUY);
+         ResetObservationWindow();
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -1332,6 +1692,16 @@ bool ValidateInputs()
       Print("IDC_A: slippage points must be >= 0");
       return false;
      }
+   if(InpWindowBars < 2)
+     {
+      Print("IDC_A: observation window bars must be >= 2");
+      return false;
+     }
+   if(InpMinEmaSepPts < 0)
+     {
+      Print("IDC_A: EMA separation points must be >= 0");
+      return false;
+     }
    if(InpPanelFontSize < 8 || InpPanelFontSize > 16)
      {
       Print("IDC_A: panel font size must be 8-16");
@@ -1353,9 +1723,11 @@ int OnInit()
 
    UpdateBrokerTime();
 
-   Print("IDC_A init v2.01 | trade symbol=", g_trade_symbol,
+   Print("IDC_A init v2.02 | trade symbol=", g_trade_symbol,
          " | chart symbol=", Symbol(),
          " | timeframe=M1",
+         " | window=", InpWindowBars,
+         " | ema_sep=", InpMinEmaSepPts, "pt",
          " | broker time=", FormatBrokerTime(g_broker_time),
          " | offset=", BrokerOffsetLabel(),
          " | lot mode=", LotModeLabel(),
