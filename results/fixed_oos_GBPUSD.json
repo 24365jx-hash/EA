@@ -1,0 +1,83 @@
+{
+  "folds": [
+    {
+      "test_start": "2019-07-18",
+      "test_end": "2020-07-17",
+      "pos_month_rate": 0.75,
+      "avg_month": 70.42,
+      "median_month": 67.75,
+      "max_dd": 0.061,
+      "return": 0.211,
+      "pf": 2.032,
+      "trades": 37
+    },
+    {
+      "test_start": "2020-07-20",
+      "test_end": "2021-07-16",
+      "pos_month_rate": 0.583,
+      "avg_month": -5.36,
+      "median_month": 19.0,
+      "max_dd": 0.104,
+      "return": -0.016,
+      "pf": 0.937,
+      "trades": 38
+    },
+    {
+      "test_start": "2021-07-19",
+      "test_end": "2022-07-18",
+      "pos_month_rate": 0.75,
+      "avg_month": 38.81,
+      "median_month": 21.33,
+      "max_dd": 0.061,
+      "return": 0.116,
+      "pf": 1.594,
+      "trades": 33
+    },
+    {
+      "test_start": "2022-07-18",
+      "test_end": "2023-07-18",
+      "pos_month_rate": 0.5,
+      "avg_month": 18.47,
+      "median_month": 0.85,
+      "max_dd": 0.045,
+      "return": 0.055,
+      "pf": 1.282,
+      "trades": 30
+    },
+    {
+      "test_start": "2023-07-18",
+      "test_end": "2024-07-18",
+      "pos_month_rate": 0.667,
+      "avg_month": 22.76,
+      "median_month": 44.71,
+      "max_dd": 0.092,
+      "return": 0.068,
+      "pf": 1.261,
+      "trades": 41
+    },
+    {
+      "test_start": "2024-07-18",
+      "test_end": "2025-07-18",
+      "pos_month_rate": 0.5,
+      "avg_month": 8.4,
+      "median_month": 5.32,
+      "max_dd": 0.089,
+      "return": 0.025,
+      "pf": 1.112,
+      "trades": 35
+    },
+    {
+      "test_start": "2025-07-18",
+      "test_end": "2026-07-17",
+      "pos_month_rate": 0.667,
+      "avg_month": 44.88,
+      "median_month": 49.78,
+      "max_dd": 0.069,
+      "return": 0.135,
+      "pf": 1.647,
+      "trades": 36
+    }
+  ],
+  "mean_pos_rate": 0.631,
+  "mean_avg_month": 28.34
+}

@@ -1,0 +1,33 @@
+{
+  "strategy_id": "WPFI",
+  "name": "WMA-21 Price Flip Income System",
+  "constraint": "exactly_one_moving_average",
+  "selected_ma": {"type": "wma", "period": 21},
+  "rejected_relative_to_objective": ["ema", "sma", "jma_approx"],
+  "market": {"symbol": "GBPUSD", "timeframe": "D1"},
+  "rules": {
+    "entry": "close cross above/below WMA(21) flips position",
+    "stop": "1.15x distance from entry to WMA, clipped 15-80 pips",
+    "take_profit_R": 2.5,
+    "ma_exit": "close through WMA against position",
+    "max_positions": 1
+  },
+  "capital": {
+    "initial_usd": 4000,
+    "risk_per_trade_income_mode": 0.01,
+    "risk_per_trade_growth_mode": 0.015,
+    "monthly_withdraw_fraction_of_profit": 0.5,
+    "reserve_floor_usd": 4000
+  },
+  "verified_metrics": {
+    "sample": "2016-07 to 2026-07",
+    "in_sample_positive_month_rate": 0.625,
+    "in_sample_profit_factor": 1.327,
+    "in_sample_max_drawdown": 0.133,
+    "fixed_param_oos_mean_positive_month_rate": 0.631,
+    "fixed_param_oos_mean_monthly_pnl_usd_at_1pct_risk": 28.34,
+    "realistic_monthly_income_at_4k_usd": "about 20-40 USD median, not living income"
+  },
+  "capital_for_500_usd_median_month_approx": 62000,
+  "disclaimer": "Research/education only. Not investment advice. Past results do not guarantee future returns."
+}
