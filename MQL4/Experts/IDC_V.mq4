@@ -109,6 +109,22 @@ int OnInit()
    g_buy_stop_ticket = -1;
    g_sell_stop_ticket = -1;
 
+   // restart safety: restore entry-bar lock from any already-open position (R01)
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(OrderMagicNumber() != InpMagic || OrderSymbol() != g_symbol) continue;
+      if(OrderType() == OP_BUY || OrderType() == OP_SELL)
+      {
+         int sh = iBarShift(g_symbol, PERIOD_M5, OrderOpenTime(), true);
+         if(sh < 0) sh = 0;
+         g_last_entry_bar = iTime(g_symbol, PERIOD_M5, sh);
+         break;
+      }
+   }
+
+   SyncTicketsFromMarket();
+
    Print("IDC_V v2.00 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
