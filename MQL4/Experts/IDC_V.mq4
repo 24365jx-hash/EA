@@ -580,11 +580,16 @@ bool BuildStraddlePrices(double &buy_px, double &sell_px, double &buy_sl, double
    buy_px  = NormalizeDouble(mid + PtsPrice(half_pts), g_digits);
    sell_px = NormalizeDouble(mid - PtsPrice(half_pts), g_digits);
 
-   // BuyStop must be > Ask, SellStop < Bid
-   if(buy_px <= ask)
-      buy_px = NormalizeDouble(ask + PtsPrice(MathMax(1, BrokerMinDistancePts() + InpSLPadPts)), g_digits);
-   if(sell_px >= bid)
-      sell_px = NormalizeDouble(bid - PtsPrice(MathMax(1, BrokerMinDistancePts() + InpSLPadPts)), g_digits);
+   // BuyStop must be > Ask, SellStop < Bid (broker-legal floor)
+   {
+      int lift = 1;
+      if(InpUseSLGuardian)
+         lift = MathMax(1, BrokerMinDistancePts() + InpSLPadPts);
+      if(buy_px <= ask)
+         buy_px = NormalizeDouble(ask + PtsPrice(lift), g_digits);
+      if(sell_px >= bid)
+         sell_px = NormalizeDouble(bid - PtsPrice(lift), g_digits);
+   }
 
    buy_sl  = NormalizeDouble(buy_px  - PtsPrice(sl_pts), g_digits);
    sell_sl = NormalizeDouble(sell_px + PtsPrice(sl_pts), g_digits);
