@@ -1,110 +1,118 @@
 //+------------------------------------------------------------------+
-//|                                                       IDC_V.mq4  |
-//|                     BuyStop/SellStop Straddle + Trailing (MT4)   |
-//|                                              Timeframe: M5/Gold  |
+//| IDC_V.mq4                                                         |
+//| Spec lock: docs/IDC_V_전략서.md v1.0                               |
 //+------------------------------------------------------------------+
 #property copyright "IDC_V"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 #property strict
-#property description "IDC_V - XAUUSD M5 BuyStop/SellStop straddle EA with OCO + trailing (no TP)"
+#property description "IDC_V — XAUUSD M5 BuyStop/SellStop straddle. Spec: docs/IDC_V_전략서.md v1.0"
 
-//--- Money / Lots
-input string           InpSecLots          = "=== Lot ===";
-input bool             InpUseAutoLot       = true;          // Use auto lot
-input double           InpRiskPercent      = 1.0;           // Auto lot risk % of balance
-input double           InpFixedLot         = 0.01;          // Fixed lot (if auto off)
-input double           InpMaxLot           = 5.0;           // Max lot cap
+//==================== INPUTS (전략서 §7) ====================
+input string InpSecLot                 = "=== Lot ===";                 // 
+input bool   InpUseAutoLot             = true;                          // Auto lot ON/OFF
+input double InpRiskPercent            = 1.0;                           // Auto lot risk % of balance
+input double InpFixedLot               = 0.01;                          // Fixed lot
+input double InpMaxLot                 = 5.0;                           // Max lot
 
-//--- Entry / Stops (ALL VALUES IN POINTS)
-input string           InpSecEntry         = "=== Entry / SL (points) ===";
-input int              InpEntryOffsetPts   = 95;            // Pending offset from mid price (points)
-input int              InpSLPoints         = 150;           // Initial SL distance (points)
-input int              InpMinEntryGapPts   = 20;            // Min gap beyond stop-level/spread (points)
+input string InpSecEntry               = "=== Entry / SL (points) ==="; // 
+input int    InpStopLineGapPts         = 200;                           // BuyStop↔SellStop gap (points)
+input int    InpSLPoints               = 150;                           // Initial SL (points)
+input int    InpMinEntryGapPts         = 20;                            // Extra min gap pad (points)
 
-//--- Trailing (NO TP) — ALL IN POINTS
-input string           InpSecTrail         = "=== Trailing (points) ===";
-input int              InpTrailStartPts    = 200;           // Trailing start (points from entry)
-input int              InpTrailStepPts     = 10;            // Trailing step (points)
+input string InpSecTrail               = "=== Trailing (points) ===";   // 
+input int    InpTrailStartPts          = 200;                           // Trail start from entry (points)
+input int    InpTrailStepPts           = 10;                            // Trail step (points)
 
-//--- SL Guardian
-input string           InpSecGuard         = "=== SL Guardian ===";
-input bool             InpUseSLGuardian    = true;          // Enable SL Guardian
-input int              InpMaxSpreadPts     = 80;            // Max allowed spread (points)
-input int              InpSpreadBufferPts  = 15;            // Extra buffer over StopLevel (points)
-input int              InpSLPadPts         = 5;             // Pad SL beyond broker minimum (points)
-input bool             InpCancelOnWideSprd = true;          // Cancel pendings if spread too wide
+input string InpSecGuard               = "=== SL Guardian ===";         // 
+input bool   InpUseSLGuardian          = true;                          // SL Guardian master switch
+input int    InpMaxSpreadPts           = 80;                            // Max spread (points)
+input int    InpSpreadBufferPts        = 15;                            // Spread/stop buffer (points)
+input int    InpSLPadPts               = 5;                             // SL pad over StopLevel (points)
+input bool   InpCancelOnWideSprd       = true;                          // Cancel pendings if spread wide
 
-//--- Session / Risk
-input string           InpSecTime          = "=== Session / Daily Loss ===";
-input bool             InpUseTimeFilter    = true;          // Use trading hours
-input int              InpStartHourGMT     = 13;            // Start hour (GMT) — NY open ~13:00 GMT
-input int              InpStartMinuteGMT   = 0;             // Start minute (GMT)
-input int              InpEndHourGMT       = 16;            // End hour (GMT)
-input int              InpEndMinuteGMT     = 0;             // End minute (GMT)
-input bool             InpCloseOutsideHrs  = false;         // Close open trade outside hours
-input double           InpDailyLossPercent = 5.0;           // Daily loss limit (% of day-start equity)
-input bool             InpStopOnDailyLoss  = true;          // Block new entries when daily loss hit
+input string InpSecSession             = "=== Session / Daily Loss ==="; // 
+input bool   InpUseTimeFilter          = true;                          // Use session filter
+input int    InpStartHourGMT           = 13;                            // Session start hour GMT
+input int    InpStartMinuteGMT         = 0;                             // Session start minute GMT
+input int    InpEndHourGMT             = 16;                            // Session end hour GMT
+input int    InpEndMinuteGMT           = 0;                             // Session end minute GMT
+input bool   InpCloseOutsideHrs        = false;                         // Close position outside session
+input double InpDailyLossPercent       = 5.0;                           // Daily loss % of day-start equity
+input bool   InpStopOnDailyLoss        = true;                          // Block new entries on daily loss
+input bool   InpCloseOnDailyLoss       = false;                         // Close position on daily loss
 
-//--- Symbol / System
-input string           InpSecSys           = "=== System ===";
-input bool             InpAutoDetectSymbol = true;          // Auto-detect gold symbol if needed
-input string           InpForcedSymbol     = "";            // Force symbol (blank = chart/auto)
-input int              InpMagic            = 260719;        // Magic number
-input int              InpSlippagePts      = 30;            // Slippage (points)
-input bool             InpShowPanel        = true;          // Show status panel
-input string           InpTradeComment     = "IDC_V";       // Order comment
+input string InpSecSys                 = "=== System ===";              // 
+input bool   InpAutoDetectSymbol       = true;                          // Auto-detect gold symbol
+input string InpForcedSymbol           = "";                            // Force symbol (blank=auto/chart)
+input int    InpMagic                  = 260719;                        // Magic number
+input int    InpSlippagePts            = 30;                            // Slippage (points)
+input bool   InpShowPanel              = true;                          // Show Comment panel
+input string InpTradeComment           = "IDC_V";                       // Order comment
 
-//--- runtime
+//==================== RUNTIME ====================
 string   g_symbol;
-double   g_point;              // normalized 1-point price size
+double   g_point;            // unified 1-point price
 int      g_digits;
-int      g_gmt_offset_hours;   // server = GMT + offset
+int      g_gmt_offset_sec;   // server - GMT (seconds)
 datetime g_day_stamp;
 double   g_day_start_equity;
 bool     g_daily_loss_hit;
-datetime g_last_place_bar;
-datetime g_last_entry_bar;
-datetime g_entry_time;
-double   g_entry_price;
-int      g_entry_type;         // OP_BUY / OP_SELL / -1
+datetime g_last_place_bar;   // M5 bar when straddle was newly placed
+datetime g_last_entry_bar;   // M5 bar when position filled
 bool     g_trail_armed;
+int      g_buy_stop_ticket;
+int      g_sell_stop_ticket;
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_symbol = ResolveSymbol();
-   if(g_symbol == "")
+   if(Period() != PERIOD_M5)
    {
-      Print("IDC_V: gold symbol not found.");
+      Alert("IDC_V: M5 only. Current TF=", Period());
       return INIT_FAILED;
    }
 
+   g_symbol = ResolveSymbol();
+   if(g_symbol == "" || !IsGoldSymbol(g_symbol))
+   {
+      Alert("IDC_V: gold symbol not resolved. Attach to XAUUSD/GOLD or set InpForcedSymbol.");
+      return INIT_FAILED;
+   }
    if(!SymbolSelect(g_symbol, true))
-      Print("IDC_V: SymbolSelect failed for ", g_symbol);
+   {
+      Alert("IDC_V: SymbolSelect failed: ", g_symbol);
+      return INIT_FAILED;
+   }
+
+   if(InpStopLineGapPts < 2)
+   {
+      Alert("IDC_V: InpStopLineGapPts must be >= 2");
+      return INIT_FAILED;
+   }
+   if(InpSLPoints < 1 || InpTrailStartPts < 1 || InpTrailStepPts < 1)
+   {
+      Alert("IDC_V: SL/TrailStart/TrailStep must be >= 1");
+      return INIT_FAILED;
+   }
 
    g_digits = (int)MarketInfo(g_symbol, MODE_DIGITS);
    g_point  = NormalizedPoint(g_symbol);
-   g_gmt_offset_hours = DetectBrokerGmtOffset();
+   RefreshGmtOffset();
 
    g_day_stamp = 0;
    g_day_start_equity = AccountEquity();
    g_daily_loss_hit = false;
    g_last_place_bar = 0;
    g_last_entry_bar = 0;
-   g_entry_time = 0;
-   g_entry_price = 0;
-   g_entry_type = -1;
    g_trail_armed = false;
+   g_buy_stop_ticket = -1;
+   g_sell_stop_ticket = -1;
 
-   Print("IDC_V init | symbol=", g_symbol,
-         " digits=", g_digits,
+   Print("IDC_V v2.00 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
-         " brokerGMT=", (g_gmt_offset_hours >= 0 ? "+" : ""), g_gmt_offset_hours);
-
-   if(Period() != PERIOD_M5)
-      Print("IDC_V warning: designed for M5 (current TF=", Period(), ")");
-
+         " gmt_off_sec=", g_gmt_offset_sec,
+         " gap=", InpStopLineGapPts, " sl=", InpSLPoints);
    return INIT_SUCCEEDED;
 }
 
@@ -112,7 +120,6 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Comment("");
-   ObjectDelete(0, "IDC_V_PANEL");
 }
 
 //+------------------------------------------------------------------+
@@ -120,74 +127,82 @@ void OnTick()
 {
    if(!IsConnected() || !IsTradeAllowed())
       return;
+   if(Period() != PERIOD_M5)
+      return;
 
    RefreshRates();
+   RefreshGmtOffsetHourly();
    UpdateDayState();
+   SyncTicketsFromMarket();
 
-   // Sync state from actual positions/orders
-   SyncPositionState();
-
-   // SL Guardian / Trailing on open position
-   if(HasOpenPosition())
+   //--- IN POSITION
+   if(CountOurPositions() > 0)
    {
+      EnforceOCO();                 // R02
       if(InpUseSLGuardian)
-         GuardOpenPositionSL();
-      ManageTrailing();
+         GuardOpenPositionSL();     // G04 G05
+      ManageTrailing();             // §3.3
+
+      if(g_daily_loss_hit && InpCloseOnDailyLoss)
+         CloseOurPosition();
+
+      if(!IsWithinTradingHours() && InpCloseOutsideHrs)
+         CloseOurPosition();
+
+      DrawPanel();
+      return;                       // R03: no new entries
    }
 
-   // OCO: if one side filled, kill opposite pending
-   EnforceOCO();
+   //--- FLAT
+   g_trail_armed = false;
 
-   // Outside hours handling
    bool in_session = IsWithinTradingHours();
    if(!in_session)
    {
       CancelAllPendings();
-      if(InpCloseOutsideHrs && HasOpenPosition())
-         CloseOurPosition();
-      DrawPanel(in_session);
+      DrawPanel();
       return;
    }
 
    if(g_daily_loss_hit && InpStopOnDailyLoss)
    {
       CancelAllPendings();
-      DrawPanel(in_session);
+      DrawPanel();
       return;
    }
 
-   // While in trade: no new entries until fully closed
-   if(HasOpenPosition())
+   if(InpUseSLGuardian && SpreadPoints() > InpMaxSpreadPts)
    {
-      DrawPanel(in_session);
+      if(InpCancelOnWideSprd)
+         CancelAllPendings();
+      DrawPanel();
       return;
    }
 
-   // Flat: clear stale pendings if spread too wide
-   if(InpUseSLGuardian && InpCancelOnWideSprd && SpreadPoints() > InpMaxSpreadPts)
-   {
-      CancelAllPendings();
-      DrawPanel(in_session);
-      return;
-   }
+   datetime bar = CurrentM5Bar();
+   int pend = CountOurPendings();
 
-   // One setup per bar; only if no pendings and no position
-   datetime bar_time = iTime(g_symbol, PERIOD_M5, 0);
-   if(CountOurPendings() == 0)
+   if(pend == 0)
    {
-      // one entry per bar: do not place again on a bar that already produced an entry
-      if(bar_time != g_last_entry_bar && bar_time != g_last_place_bar)
+      // R01: new place only if this bar has no entry yet and no place yet
+      if(bar != g_last_entry_bar && bar != g_last_place_bar)
       {
          if(PlaceStraddle())
-            g_last_place_bar = bar_time;
+            g_last_place_bar = bar;
       }
    }
+   else
+   {
+      // §1.4 re-anchor same setup (not a new entry)
+      ReanchorStraddle();
+      EnforceOCO(); // safety if somehow a fill raced
+   }
 
-   DrawPanel(in_session);
+   DrawPanel();
 }
 
 //+------------------------------------------------------------------+
-//| Symbol / point / time helpers                                     |
+//| A01–A03 Symbol                                                    |
 //+------------------------------------------------------------------+
 string ResolveSymbol()
 {
@@ -199,102 +214,114 @@ string ResolveSymbol()
       return chart_sym;
 
    if(!InpAutoDetectSymbol)
-      return chart_sym; // allow non-gold if user attaches intentionally
+      return "";
 
-   string candidates[] = {
+   string candidates[] =
+   {
       "XAUUSD","XAUUSDm","XAUUSD.a","XAUUSD.i","XAUUSD.r","XAUUSD.pro",
-      "XAUUSDmicro","GOLD","GOLDm","GOLD.a","XAUUSD#","XAU/USD","Xauusd"
+      "XAUUSDmicro","GOLD","GOLDm","GOLD.a","XAUUSD#","XAU/USD"
    };
    for(int i = 0; i < ArraySize(candidates); i++)
    {
-      if(MarketInfo(candidates[i], MODE_BID) > 0 || SymbolSelect(candidates[i], true))
-      {
-         if(MarketInfo(candidates[i], MODE_BID) > 0)
-            return candidates[i];
-      }
+      if(SymbolSelect(candidates[i], true) && MarketInfo(candidates[i], MODE_BID) > 0)
+         return candidates[i];
    }
 
-   // scan market watch
-   int total = SymbolsTotal(true);
+   int total = SymbolsTotal(false);
    for(int s = 0; s < total; s++)
    {
-      string name = SymbolName(s, true);
+      string name = SymbolName(s, false);
       if(IsGoldSymbol(name))
-         return name;
+      {
+         if(SymbolSelect(name, true) && MarketInfo(name, MODE_BID) > 0)
+            return name;
+      }
    }
-   return chart_sym;
+   return "";
 }
 
 bool IsGoldSymbol(const string sym)
 {
    string u = sym;
    StringToUpper(u);
-   if(StringFind(u, "XAU") >= 0) return true;
-   if(StringFind(u, "GOLD") >= 0) return true;
-   return false;
+   return (StringFind(u, "XAU") >= 0 || StringFind(u, "GOLD") >= 0);
 }
 
+//+------------------------------------------------------------------+
+//| P02 Point normalize                                               |
+//+------------------------------------------------------------------+
 double NormalizedPoint(const string sym)
 {
    double p = MarketInfo(sym, MODE_POINT);
    int d = (int)MarketInfo(sym, MODE_DIGITS);
-   // Unify "point" across 2/3-digit gold and 4/5-digit FX:
-   // Digits 3 or 5 => 1 point = 10 * MODE_POINT (so 150 pts ≈ 1.50 on gold)
    if(d == 3 || d == 5)
       return p * 10.0;
    return p;
 }
 
-double PointsToPrice(const int pts)
+double PtsPrice(const int pts) { return pts * g_point; }
+
+int PricePts(const double dist)
 {
-   return pts * g_point;
+   if(g_point <= 0.0) return 0;
+   return (int)MathRound(MathAbs(dist) / g_point);
 }
 
-int PriceToPoints(const double price_dist)
+int SlippageRaw()
 {
-   if(g_point <= 0) return 0;
-   return (int)MathRound(MathAbs(price_dist) / g_point);
+   double raw = MarketInfo(g_symbol, MODE_POINT);
+   if(raw <= 0.0) return 3;
+   return (int)MathMax(1, MathRound(PtsPrice(InpSlippagePts) / raw));
 }
 
-int DetectBrokerGmtOffset()
+//+------------------------------------------------------------------+
+//| A04 GMT offset                                                    |
+//+------------------------------------------------------------------+
+void RefreshGmtOffset()
 {
-   // Prefer TimeGMT() when available (build 600+)
-   datetime server_now = TimeCurrent();
-   datetime gmt_now = TimeGMT();
-   int off = (int)MathRound((double)(server_now - gmt_now) / 3600.0);
-   // clamp to sane range
-   if(off < -12) off = -12;
-   if(off > 14)  off = 14;
-   return off;
+   g_gmt_offset_sec = (int)(TimeCurrent() - TimeGMT());
 }
 
-datetime BrokerTimeFromGmtHMS(const int gh, const int gm, const int gs=0)
+void RefreshGmtOffsetHourly()
 {
+   static datetime last = 0;
    datetime now = TimeCurrent();
-   // Today's GMT midnight approximated via server time - offset
-   datetime gmt_now = now - g_gmt_offset_hours * 3600;
+   if(last == 0 || now - last >= 3600)
+   {
+      RefreshGmtOffset();
+      last = now;
+   }
+}
+
+datetime BrokerFromGmtHMS(const int gh, const int gm)
+{
+   datetime gmt_now = TimeCurrent() - g_gmt_offset_sec;
    MqlDateTime dt;
    TimeToStruct(gmt_now, dt);
    dt.hour = gh;
    dt.min  = gm;
-   dt.sec  = gs;
+   dt.sec  = 0;
    datetime gmt_target = StructToTime(dt);
-   return gmt_target + g_gmt_offset_hours * 3600;
+   return gmt_target + g_gmt_offset_sec;
 }
 
 bool IsWithinTradingHours()
 {
    if(!InpUseTimeFilter)
       return true;
-
-   datetime start = BrokerTimeFromGmtHMS(InpStartHourGMT, InpStartMinuteGMT);
-   datetime end   = BrokerTimeFromGmtHMS(InpEndHourGMT, InpEndMinuteGMT);
+   datetime start = BrokerFromGmtHMS(InpStartHourGMT, InpStartMinuteGMT);
+   datetime end   = BrokerFromGmtHMS(InpEndHourGMT, InpEndMinuteGMT);
    datetime now   = TimeCurrent();
-
-   // overnight window support
-   if(end <= start)
+   if(end == start)
+      return true;
+   if(end < start)
       return (now >= start || now < end);
    return (now >= start && now < end);
+}
+
+datetime CurrentM5Bar()
+{
+   return iTime(g_symbol, PERIOD_M5, 0);
 }
 
 //+------------------------------------------------------------------+
@@ -302,80 +329,86 @@ void UpdateDayState()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   datetime day = StringToTime(StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day));
+   datetime day = StringToTime(StringFormat("%04d.%02d.%02d 00:00", dt.year, dt.mon, dt.day));
    if(day != g_day_stamp)
    {
       g_day_stamp = day;
       g_day_start_equity = AccountEquity();
       g_daily_loss_hit = false;
    }
-
-   if(InpDailyLossPercent <= 0)
+   if(InpDailyLossPercent <= 0.0)
       return;
-
-   double eq = AccountEquity();
-   double dd_pct = 0.0;
-   if(g_day_start_equity > 0)
-      dd_pct = (g_day_start_equity - eq) / g_day_start_equity * 100.0;
-
-   if(dd_pct >= InpDailyLossPercent)
+   if(g_day_start_equity <= 0.0)
+      return;
+   double dd = (g_day_start_equity - AccountEquity()) / g_day_start_equity * 100.0;
+   if(dd >= InpDailyLossPercent)
       g_daily_loss_hit = true;
 }
 
 //+------------------------------------------------------------------+
+//| Spread / stop level (unified points)                              |
+//+------------------------------------------------------------------+
 int SpreadPoints()
 {
-   double ask = MarketInfo(g_symbol, MODE_ASK);
-   double bid = MarketInfo(g_symbol, MODE_BID);
-   return PriceToPoints(ask - bid);
+   return PricePts(MarketInfo(g_symbol, MODE_ASK) - MarketInfo(g_symbol, MODE_BID));
 }
 
-int BrokerStopLevelPoints()
+int BrokerMinDistancePts()
 {
    int stop_level = (int)MarketInfo(g_symbol, MODE_STOPLEVEL);
    int freeze     = (int)MarketInfo(g_symbol, MODE_FREEZELEVEL);
-   // MODE_STOPLEVEL is in points of MODE_POINT (raw). Convert to our unified points.
-   double raw_point = MarketInfo(g_symbol, MODE_POINT);
    int raw = MathMax(stop_level, freeze);
-   if(raw_point <= 0 || g_point <= 0) return raw;
-   return (int)MathCeil((raw * raw_point) / g_point);
+   double raw_pt = MarketInfo(g_symbol, MODE_POINT);
+   if(raw_pt <= 0.0 || g_point <= 0.0)
+      return raw;
+   return (int)MathCeil((raw * raw_pt) / g_point);
 }
 
-int MinEntryOffsetPoints()
+// Effective half-gap each side (points)
+int EffectiveHalfGapPts()
 {
-   int need = BrokerStopLevelPoints() + SpreadPoints() + InpSpreadBufferPts + InpMinEntryGapPts;
-   if(need < InpEntryOffsetPts) need = InpEntryOffsetPts;
-   return need;
+   int half = InpStopLineGapPts / 2;
+   if(half < 1) half = 1;
+
+   if(!InpUseSLGuardian)
+      return half;
+
+   // G02: ensure each side clears stop+spread+buffers
+   int need = BrokerMinDistancePts() + SpreadPoints() + InpSpreadBufferPts + InpMinEntryGapPts;
+   if(half < need)
+      half = need;
+   return half;
 }
 
-int MinSLPoints()
+int EffectiveSLPts()
 {
-   int need = BrokerStopLevelPoints() + SpreadPoints() + InpSLPadPts;
-   if(need < InpSLPoints) need = InpSLPoints;
-   // Guardian may force larger SL than user asked when broker requires it
-   return need;
+   int sl = InpSLPoints;
+   if(!InpUseSLGuardian)
+      return sl;
+   // G03
+   int need = BrokerMinDistancePts() + SpreadPoints() + InpSLPadPts;
+   if(sl < need)
+      sl = need;
+   return sl;
 }
 
 //+------------------------------------------------------------------+
-//| Lot                                                               |
+//| Lots                                                              |
 //+------------------------------------------------------------------+
 double NormalizeVolume(double lots)
 {
    double minlot  = MarketInfo(g_symbol, MODE_MINLOT);
    double maxlot  = MarketInfo(g_symbol, MODE_MAXLOT);
    double steplot = MarketInfo(g_symbol, MODE_LOTSTEP);
-   if(steplot <= 0) steplot = 0.01;
-
+   if(steplot <= 0.0) steplot = 0.01;
    if(lots < minlot) lots = minlot;
    if(lots > maxlot) lots = maxlot;
    if(lots > InpMaxLot) lots = InpMaxLot;
-
    lots = MathFloor(lots / steplot + 1e-8) * steplot;
-
-   int lot_digits = 2;
-   if(steplot < 0.01) lot_digits = 3;
-   if(steplot >= 0.1) lot_digits = 1;
-   return NormalizeDouble(lots, lot_digits);
+   int ld = 2;
+   if(steplot < 0.01 - 1e-12) ld = 3;
+   if(steplot >= 0.1 - 1e-12) ld = 1;
+   return NormalizeDouble(lots, ld);
 }
 
 double CalcLot(const int sl_pts)
@@ -383,32 +416,25 @@ double CalcLot(const int sl_pts)
    if(!InpUseAutoLot)
       return NormalizeVolume(InpFixedLot);
 
-   double balance = AccountBalance();
-   double risk_money = balance * InpRiskPercent / 100.0;
-
+   double risk_money = AccountBalance() * InpRiskPercent / 100.0;
    double tick_val  = MarketInfo(g_symbol, MODE_TICKVALUE);
    double tick_size = MarketInfo(g_symbol, MODE_TICKSIZE);
-   if(tick_val <= 0 || tick_size <= 0 || sl_pts <= 0)
+   if(tick_val <= 0.0 || tick_size <= 0.0 || sl_pts <= 0)
       return NormalizeVolume(InpFixedLot);
 
-   double sl_price = PointsToPrice(sl_pts);
+   double sl_price = PtsPrice(sl_pts);
    double money_per_lot = (sl_price / tick_size) * tick_val;
-   if(money_per_lot <= 0)
+   if(money_per_lot <= 0.0)
       return NormalizeVolume(InpFixedLot);
-
-   double lots = risk_money / money_per_lot;
-   return NormalizeVolume(lots);
+   return NormalizeVolume(risk_money / money_per_lot);
 }
 
 //+------------------------------------------------------------------+
-//| Position / order inventory                                        |
+//| Order inventory                                                   |
 //+------------------------------------------------------------------+
-bool IsOurOrder()
+bool IsOurSelected()
 {
-   // Requires OrderSelect() already performed by caller
-   if(OrderMagicNumber() != InpMagic) return false;
-   if(OrderSymbol() != g_symbol) return false;
-   return true;
+   return (OrderMagicNumber() == InpMagic && OrderSymbol() == g_symbol);
 }
 
 int CountOurPositions()
@@ -417,9 +443,8 @@ int CountOurPositions()
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
-      if(OrderType() == OP_BUY || OrderType() == OP_SELL)
-         c++;
+      if(!IsOurSelected()) continue;
+      if(OrderType() == OP_BUY || OrderType() == OP_SELL) c++;
    }
    return c;
 }
@@ -430,85 +455,94 @@ int CountOurPendings()
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
+      if(!IsOurSelected()) continue;
       int t = OrderType();
-      if(t == OP_BUYSTOP || t == OP_SELLSTOP || t == OP_BUYLIMIT || t == OP_SELLLIMIT)
-         c++;
+      if(t == OP_BUYSTOP || t == OP_SELLSTOP) c++;
    }
    return c;
 }
 
-bool HasOpenPosition()
-{
-   return CountOurPositions() > 0;
-}
-
-int FindOurPositionTicket()
+int FindPositionTicket()
 {
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
+      if(!IsOurSelected()) continue;
       if(OrderType() == OP_BUY || OrderType() == OP_SELL)
          return OrderTicket();
    }
    return -1;
 }
 
-void SyncPositionState()
+void SyncTicketsFromMarket()
 {
-   int ticket = FindOurPositionTicket();
-   if(ticket < 0)
-   {
-      if(g_entry_type != -1)
-      {
-         // just closed
-         g_entry_type = -1;
-         g_entry_price = 0;
-         g_entry_time = 0;
-         g_trail_armed = false;
-      }
-      return;
-   }
-
-   if(!OrderSelect(ticket, SELECT_BY_TICKET))
-      return;
-
-   if(g_entry_type == -1)
-   {
-      // new fill detected
-      g_entry_type  = OrderType();
-      g_entry_price = OrderOpenPrice();
-      g_entry_time  = OrderOpenTime();
-      g_trail_armed = false;
-      g_last_entry_bar = iTime(g_symbol, PERIOD_M5, 0);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| OCO                                                               |
-//+------------------------------------------------------------------+
-void EnforceOCO()
-{
-   bool has_buy = false;
-   bool has_sell = false;
-
+   g_buy_stop_ticket = -1;
+   g_sell_stop_ticket = -1;
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
+      if(!IsOurSelected()) continue;
+      if(OrderType() == OP_BUYSTOP)  g_buy_stop_ticket  = OrderTicket();
+      if(OrderType() == OP_SELLSTOP) g_sell_stop_ticket = OrderTicket();
+   }
+
+   // detect new fill → stamp entry bar (R01)
+   static int last_pos_count = 0;
+   int now_pos = CountOurPositions();
+   if(now_pos > 0 && last_pos_count == 0)
+   {
+      int tk = FindPositionTicket();
+      if(tk >= 0 && OrderSelect(tk, SELECT_BY_TICKET))
+      {
+         // entry bar = M5 bar of open time
+         datetime ot = OrderOpenTime();
+         int shift = iBarShift(g_symbol, PERIOD_M5, ot, true);
+         if(shift < 0) shift = 0;
+         g_last_entry_bar = iTime(g_symbol, PERIOD_M5, shift);
+         g_trail_armed = false;
+      }
+   }
+   last_pos_count = now_pos;
+}
+
+//+------------------------------------------------------------------+
+//| R02 OCO                                                           |
+//+------------------------------------------------------------------+
+void EnforceOCO()
+{
+   bool has_buy = false, has_sell = false;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!IsOurSelected()) continue;
       if(OrderType() == OP_BUY)  has_buy = true;
       if(OrderType() == OP_SELL) has_sell = true;
    }
-
-   if(has_buy || has_sell)
-   {
-      // cancel all remaining pendings (opposite + any leftover)
-      CancelAllPendings();
+   if(!has_buy && !has_sell)
       return;
-   }
 
-   // If somehow both pendings still exist but one side invalid — nothing else
+   // cancel all pendings
+   CancelAllPendings();
+
+   // R04: if both buy and sell somehow open, close the newer one
+   if(has_buy && has_sell)
+   {
+      int newer = -1;
+      datetime newest = 0;
+      for(int j = OrdersTotal() - 1; j >= 0; j--)
+      {
+         if(!OrderSelect(j, SELECT_BY_POS, MODE_TRADES)) continue;
+         if(!IsOurSelected()) continue;
+         if(OrderType() != OP_BUY && OrderType() != OP_SELL) continue;
+         if(OrderOpenTime() >= newest)
+         {
+            newest = OrderOpenTime();
+            newer = OrderTicket();
+         }
+      }
+      if(newer >= 0)
+         CloseTicket(newer);
+   }
 }
 
 void CancelAllPendings()
@@ -516,320 +550,331 @@ void CancelAllPendings()
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
+      if(!IsOurSelected()) continue;
       int t = OrderType();
-      if(t == OP_BUYSTOP || t == OP_SELLSTOP || t == OP_BUYLIMIT || t == OP_SELLLIMIT)
+      if(t == OP_BUYSTOP || t == OP_SELLSTOP)
       {
          if(!OrderDelete(OrderTicket()))
-            Print("IDC_V: OrderDelete failed #", OrderTicket(), " err=", GetLastError());
+            Print("IDC_V: OrderDelete fail #", OrderTicket(), " err=", GetLastError());
       }
    }
+   g_buy_stop_ticket = -1;
+   g_sell_stop_ticket = -1;
 }
 
 //+------------------------------------------------------------------+
-//| Entry: BuyStop + SellStop straddle                                |
+//| Build straddle prices                                             |
+//+------------------------------------------------------------------+
+bool BuildStraddlePrices(double &buy_px, double &sell_px, double &buy_sl, double &sell_sl, int &sl_pts, int &half_pts)
+{
+   double bid = MarketInfo(g_symbol, MODE_BID);
+   double ask = MarketInfo(g_symbol, MODE_ASK);
+   if(bid <= 0.0 || ask <= 0.0)
+      return false;
+
+   // 전략서 §1.2: mid 대칭, BuyStop−SellStop = 2*half (= Gap, Guardian 시 확대 가능)
+   half_pts = EffectiveHalfGapPts();
+   sl_pts   = EffectiveSLPts();
+
+   double mid = (ask + bid) * 0.5;
+   buy_px  = NormalizeDouble(mid + PtsPrice(half_pts), g_digits);
+   sell_px = NormalizeDouble(mid - PtsPrice(half_pts), g_digits);
+
+   // BuyStop must be > Ask, SellStop < Bid
+   if(buy_px <= ask)
+      buy_px = NormalizeDouble(ask + PtsPrice(MathMax(1, BrokerMinDistancePts() + InpSLPadPts)), g_digits);
+   if(sell_px >= bid)
+      sell_px = NormalizeDouble(bid - PtsPrice(MathMax(1, BrokerMinDistancePts() + InpSLPadPts)), g_digits);
+
+   buy_sl  = NormalizeDouble(buy_px  - PtsPrice(sl_pts), g_digits);
+   sell_sl = NormalizeDouble(sell_px + PtsPrice(sl_pts), g_digits);
+
+   if(InpUseSLGuardian)
+   {
+      int min_pts = BrokerMinDistancePts() + InpSLPadPts;
+      double min_d = PtsPrice(min_pts);
+      if(buy_px - ask < min_d) return false;
+      if(bid - sell_px < min_d) return false;
+      if(buy_px - buy_sl < min_d) return false;
+      if(sell_sl - sell_px < min_d) return false;
+   }
+   return true;
+}
+
 //+------------------------------------------------------------------+
 bool PlaceStraddle()
 {
+   if(CountOurPositions() > 0 || CountOurPendings() > 0)
+      return false;
+   if(CurrentM5Bar() == g_last_entry_bar)
+      return false;
    if(InpUseSLGuardian && SpreadPoints() > InpMaxSpreadPts)
       return false;
 
-   // Hard rule: only one entry path — no position, no existing pendings
-   if(HasOpenPosition() || CountOurPendings() > 0)
+   double buy_px, sell_px, buy_sl, sell_sl;
+   int sl_pts, half_pts;
+   if(!BuildStraddlePrices(buy_px, sell_px, buy_sl, sell_sl, sl_pts, half_pts))
       return false;
-
-   // One entry per bar
-   datetime bar_time = iTime(g_symbol, PERIOD_M5, 0);
-   if(bar_time == g_last_entry_bar)
-      return false;
-
-   double bid = MarketInfo(g_symbol, MODE_BID);
-   double ask = MarketInfo(g_symbol, MODE_ASK);
-   if(bid <= 0 || ask <= 0)
-      return false;
-
-   int offset_pts = MinEntryOffsetPoints();
-   int sl_pts     = InpUseSLGuardian ? MinSLPoints() : InpSLPoints;
-   if(sl_pts < 1) sl_pts = InpSLPoints;
-
-   double offset = PointsToPrice(offset_pts);
-   double sl_dist = PointsToPrice(sl_pts);
-
-   // Mid-straddle around current market
-   double buy_price  = NormalizeDouble(ask + offset, g_digits);
-   double sell_price = NormalizeDouble(bid - offset, g_digits);
-
-   // SL only (NO TP)
-   double buy_sl  = NormalizeDouble(buy_price - sl_dist, g_digits);
-   double sell_sl = NormalizeDouble(sell_price + sl_dist, g_digits);
-
-   // Validate distances vs stop level
-   if(InpUseSLGuardian)
-   {
-      if(!ValidatePendingDistances(OP_BUYSTOP, buy_price, buy_sl))
-         return false;
-      if(!ValidatePendingDistances(OP_SELLSTOP, sell_price, sell_sl))
-         return false;
-   }
 
    double lots = CalcLot(sl_pts);
-   int slip = (int)MathMax(1, MathRound(PointsToPrice(InpSlippagePts) / MarketInfo(g_symbol, MODE_POINT)));
+   int slip = SlippageRaw();
 
    ResetLastError();
-   int buy_ticket = OrderSend(g_symbol, OP_BUYSTOP, lots, buy_price, slip, buy_sl, 0,
-                              InpTradeComment, InpMagic, 0, clrDodgerBlue);
-   if(buy_ticket < 0)
+   int bt = OrderSend(g_symbol, OP_BUYSTOP, lots, buy_px, slip, buy_sl, 0,
+                      InpTradeComment, InpMagic, 0, clrDodgerBlue);
+   if(bt < 0)
    {
-      Print("IDC_V: BuyStop failed err=", GetLastError(),
-            " price=", buy_price, " sl=", buy_sl, " lots=", lots);
+      Print("IDC_V: BuyStop fail err=", GetLastError(), " px=", buy_px, " sl=", buy_sl);
       return false;
    }
 
    ResetLastError();
-   int sell_ticket = OrderSend(g_symbol, OP_SELLSTOP, lots, sell_price, slip, sell_sl, 0,
-                               InpTradeComment, InpMagic, 0, clrOrangeRed);
-   if(sell_ticket < 0)
+   int st = OrderSend(g_symbol, OP_SELLSTOP, lots, sell_px, slip, sell_sl, 0,
+                      InpTradeComment, InpMagic, 0, clrOrangeRed);
+   if(st < 0)
    {
-      Print("IDC_V: SellStop failed err=", GetLastError(),
-            " price=", sell_price, " sl=", sell_sl, " lots=", lots);
-      // OCO integrity: remove the buy stop we just placed
-      if(OrderSelect(buy_ticket, SELECT_BY_TICKET))
-         OrderDelete(buy_ticket);
+      Print("IDC_V: SellStop fail err=", GetLastError(), " px=", sell_px, " sl=", sell_sl);
+      if(OrderSelect(bt, SELECT_BY_TICKET))
+         OrderDelete(bt);
       return false;
    }
 
-   Print("IDC_V: straddle placed | BuyStop#", buy_ticket, "@", buy_price,
-         " SellStop#", sell_ticket, "@", sell_price,
-         " SL_pts=", sl_pts, " offset_pts=", offset_pts, " lot=", lots);
-   return true;
-}
-
-bool ValidatePendingDistances(const int type, const double price, const double sl)
-{
-   double bid = MarketInfo(g_symbol, MODE_BID);
-   double ask = MarketInfo(g_symbol, MODE_ASK);
-   int min_pts = BrokerStopLevelPoints() + InpSLPadPts;
-   double min_dist = PointsToPrice(min_pts);
-
-   if(type == OP_BUYSTOP)
-   {
-      if(price - ask < min_dist - g_point * 0.1) return false;
-      if(price - sl  < min_dist - g_point * 0.1) return false;
-   }
-   if(type == OP_SELLSTOP)
-   {
-      if(bid - price < min_dist - g_point * 0.1) return false;
-      if(sl - price  < min_dist - g_point * 0.1) return false;
-   }
+   g_buy_stop_ticket = bt;
+   g_sell_stop_ticket = st;
+   Print("IDC_V: straddle OK buy#", bt, "@", buy_px, " sell#", st, "@", sell_px,
+         " half=", half_pts, " gap~", half_pts * 2, " sl=", sl_pts, " lot=", lots);
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Trailing (no TP)                                                  |
-//| Start: when profit >= TrailStart, SL -> entry +/- TrailStart      |
-//| Then chase by TrailStep increments from that locked level         |
+//| §1.4 Re-anchor pending to current price (same setup)              |
 //+------------------------------------------------------------------+
-void ManageTrailing()
+void ReanchorStraddle()
 {
-   int ticket = FindOurPositionTicket();
-   if(ticket < 0) return;
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) return;
-
-   int type = OrderType();
-   double open_price = OrderOpenPrice();
-   double cur_sl = OrderStopLoss();
-   double bid = MarketInfo(g_symbol, MODE_BID);
-   double ask = MarketInfo(g_symbol, MODE_ASK);
-
-   int start_pts = InpTrailStartPts;
-   int step_pts  = InpTrailStepPts;
-   if(start_pts <= 0 || step_pts <= 0)
+   if(CountOurPositions() > 0)
+      return;
+   if(g_buy_stop_ticket < 0 || g_sell_stop_ticket < 0)
+      SyncTicketsFromMarket();
+   if(g_buy_stop_ticket < 0 || g_sell_stop_ticket < 0)
       return;
 
-   double profit_pts = 0;
-   if(type == OP_BUY)
-      profit_pts = (bid - open_price) / g_point;
-   else if(type == OP_SELL)
-      profit_pts = (open_price - ask) / g_point;
-   else
+   double buy_px, sell_px, buy_sl, sell_sl;
+   int sl_pts, half_pts;
+   if(!BuildStraddlePrices(buy_px, sell_px, buy_sl, sell_sl, sl_pts, half_pts))
       return;
 
-   if(profit_pts < start_pts)
-      return;
-
-   // desired locked points from entry:
-   // start + floor((profit-start)/step)*step
-   double extra = profit_pts - start_pts;
-   int steps = (int)MathFloor(extra / step_pts + 1e-8);
-   int lock_pts = start_pts + steps * step_pts;
-
-   double desired_sl = 0;
-   if(type == OP_BUY)
-      desired_sl = NormalizeDouble(open_price + PointsToPrice(lock_pts), g_digits);
-   else
-      desired_sl = NormalizeDouble(open_price - PointsToPrice(lock_pts), g_digits);
-
-   // Guardian: keep SL at least min distance from market
-   if(InpUseSLGuardian)
+   // modify buy stop
+   if(OrderSelect(g_buy_stop_ticket, SELECT_BY_TICKET, MODE_TRADES))
    {
-      int min_pts = BrokerStopLevelPoints() + InpSLPadPts;
-      double min_dist = PointsToPrice(min_pts);
-      if(type == OP_BUY)
+      if(OrderType() == OP_BUYSTOP)
       {
-         double max_sl = NormalizeDouble(bid - min_dist, g_digits);
-         if(desired_sl > max_sl) desired_sl = max_sl;
-      }
-      else
-      {
-         double min_sl = NormalizeDouble(ask + min_dist, g_digits);
-         if(desired_sl < min_sl) desired_sl = min_sl;
-      }
-   }
-
-   bool improve = false;
-   if(type == OP_BUY)
-   {
-      if(cur_sl <= 0 || desired_sl > cur_sl + g_point * 0.1)
-         improve = true;
-   }
-   else
-   {
-      if(cur_sl <= 0 || desired_sl < cur_sl - g_point * 0.1)
-         improve = true;
-   }
-
-   if(!improve)
-      return;
-
-   // Do not set SL beyond current price illegally
-   if(type == OP_BUY && desired_sl >= bid) return;
-   if(type == OP_SELL && desired_sl <= ask) return;
-
-   ResetLastError();
-   if(!OrderModify(ticket, open_price, desired_sl, 0, 0, clrYellow))
-   {
-      Print("IDC_V: trailing modify fail #", ticket, " err=", GetLastError(),
-            " sl=", desired_sl, " lock_pts=", lock_pts);
-   }
-   else
-   {
-      g_trail_armed = true;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| SL Guardian for open positions                                    |
-//+------------------------------------------------------------------+
-void GuardOpenPositionSL()
-{
-   int ticket = FindOurPositionTicket();
-   if(ticket < 0) return;
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) return;
-
-   int type = OrderType();
-   double open_price = OrderOpenPrice();
-   double cur_sl = OrderStopLoss();
-   double bid = MarketInfo(g_symbol, MODE_BID);
-   double ask = MarketInfo(g_symbol, MODE_ASK);
-
-   int sl_pts = MinSLPoints();
-   double sl_dist = PointsToPrice(sl_pts);
-
-   // If SL missing — restore protective SL (never loosen a trailing lock)
-   if(cur_sl <= 0)
-   {
-      double new_sl = (type == OP_BUY)
-         ? NormalizeDouble(open_price - sl_dist, g_digits)
-         : NormalizeDouble(open_price + sl_dist, g_digits);
-
-      // clamp to broker min distance from market
-      int min_pts = BrokerStopLevelPoints() + InpSLPadPts;
-      double min_dist = PointsToPrice(min_pts);
-      if(type == OP_BUY)
-      {
-         double floor_sl = NormalizeDouble(bid - min_dist, g_digits);
-         if(new_sl > floor_sl) new_sl = floor_sl;
-      }
-      else
-      {
-         double ceil_sl = NormalizeDouble(ask + min_dist, g_digits);
-         if(new_sl < ceil_sl) new_sl = ceil_sl;
-      }
-
-      ResetLastError();
-      if(!OrderModify(ticket, open_price, new_sl, 0, 0, clrRed))
-         Print("IDC_V: guardian set SL fail err=", GetLastError());
-      return;
-   }
-
-   // If SL closer than broker allows — push it out (only if NOT already trailing in profit)
-   if(!g_trail_armed)
-   {
-      int cur_sl_pts = 0;
-      if(type == OP_BUY)  cur_sl_pts = PriceToPoints(open_price - cur_sl);
-      if(type == OP_SELL) cur_sl_pts = PriceToPoints(cur_sl - open_price);
-
-      int need = BrokerStopLevelPoints() + InpSLPadPts;
-      if(cur_sl_pts > 0 && cur_sl_pts < need)
-      {
-         double new_sl = (type == OP_BUY)
-            ? NormalizeDouble(open_price - PointsToPrice(need), g_digits)
-            : NormalizeDouble(open_price + PointsToPrice(need), g_digits);
-
-         // only widen (more protective distance), never tighten toward price here
-         bool widen = false;
-         if(type == OP_BUY  && new_sl < cur_sl) widen = true;
-         if(type == OP_SELL && new_sl > cur_sl) widen = true;
-         if(widen)
+         if(MathAbs(OrderOpenPrice() - buy_px) >= g_point ||
+            MathAbs(OrderStopLoss() - buy_sl) >= g_point)
          {
-            ResetLastError();
-            if(!OrderModify(ticket, open_price, new_sl, 0, 0, clrRed))
-               Print("IDC_V: guardian widen SL fail err=", GetLastError());
+            if(!OrderModify(g_buy_stop_ticket, buy_px, buy_sl, 0, 0, clrDodgerBlue))
+            {
+               int err = GetLastError();
+               if(err != 0 && err != 1) // 1 = no-change / unknown result on some builds
+                  Print("IDC_V: reanchor buy fail err=", err);
+            }
+         }
+      }
+   }
+
+   // modify sell stop
+   if(OrderSelect(g_sell_stop_ticket, SELECT_BY_TICKET, MODE_TRADES))
+   {
+      if(OrderType() == OP_SELLSTOP)
+      {
+         if(MathAbs(OrderOpenPrice() - sell_px) >= g_point ||
+            MathAbs(OrderStopLoss() - sell_sl) >= g_point)
+         {
+            if(!OrderModify(g_sell_stop_ticket, sell_px, sell_sl, 0, 0, clrOrangeRed))
+            {
+               int err = GetLastError();
+               if(err != 0 && err != 1)
+                  Print("IDC_V: reanchor sell fail err=", err);
+            }
          }
       }
    }
 }
 
 //+------------------------------------------------------------------+
-bool CloseOurPosition()
+//| §3.3 Trailing                                                     |
+//+------------------------------------------------------------------+
+void ManageTrailing()
 {
-   int ticket = FindOurPositionTicket();
-   if(ticket < 0) return false;
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) return false;
+   int ticket = FindPositionTicket();
+   if(ticket < 0) return;
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) return;
 
-   double price = (OrderType() == OP_BUY)
-      ? MarketInfo(g_symbol, MODE_BID)
-      : MarketInfo(g_symbol, MODE_ASK);
-   int slip = (int)MathMax(1, MathRound(PointsToPrice(InpSlippagePts) / MarketInfo(g_symbol, MODE_POINT)));
+   int type = OrderType();
+   double open_price = OrderOpenPrice();
+   double cur_sl = OrderStopLoss();
+   double bid = MarketInfo(g_symbol, MODE_BID);
+   double ask = MarketInfo(g_symbol, MODE_ASK);
+
+   double profit_pts = 0.0;
+   if(type == OP_BUY)       profit_pts = (bid - open_price) / g_point;
+   else if(type == OP_SELL) profit_pts = (open_price - ask) / g_point;
+   else return;
+
+   if(profit_pts < InpTrailStartPts)
+      return;
+
+   double extra = profit_pts - InpTrailStartPts;
+   int steps = (int)MathFloor(extra / InpTrailStepPts + 1e-8);
+   int lock_pts = InpTrailStartPts + steps * InpTrailStepPts;
+
+   double desired_sl;
+   if(type == OP_BUY)
+      desired_sl = NormalizeDouble(open_price + PtsPrice(lock_pts), g_digits);
+   else
+      desired_sl = NormalizeDouble(open_price - PtsPrice(lock_pts), g_digits);
+
+   if(InpUseSLGuardian)
+   {
+      int min_pts = BrokerMinDistancePts() + InpSLPadPts;
+      double min_d = PtsPrice(min_pts);
+      if(type == OP_BUY)
+      {
+         double max_sl = NormalizeDouble(bid - min_d, g_digits);
+         if(desired_sl > max_sl) desired_sl = max_sl;
+      }
+      else
+      {
+         double min_sl = NormalizeDouble(ask + min_d, g_digits);
+         if(desired_sl < min_sl) desired_sl = min_sl;
+      }
+   }
+
+   bool improve = false;
+   if(type == OP_BUY)
+      improve = (cur_sl <= 0.0 || desired_sl > cur_sl + g_point * 0.1);
+   else
+      improve = (cur_sl <= 0.0 || desired_sl < cur_sl - g_point * 0.1);
+
+   if(!improve) return;
+   if(type == OP_BUY  && desired_sl >= bid) return;
+   if(type == OP_SELL && desired_sl <= ask) return;
 
    ResetLastError();
-   bool ok = OrderClose(ticket, OrderLots(), price, slip, clrAqua);
-   if(!ok)
-      Print("IDC_V: close fail err=", GetLastError());
-   return ok;
+   if(!OrderModify(ticket, open_price, desired_sl, 0, 0, clrYellow))
+      Print("IDC_V: trail modify fail #", ticket, " err=", GetLastError());
+   else
+      g_trail_armed = true;
 }
 
 //+------------------------------------------------------------------+
-void DrawPanel(const bool in_session)
+//| G04 G05                                                           |
+//+------------------------------------------------------------------+
+void GuardOpenPositionSL()
+{
+   int ticket = FindPositionTicket();
+   if(ticket < 0) return;
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) return;
+
+   int type = OrderType();
+   double open_price = OrderOpenPrice();
+   double cur_sl = OrderStopLoss();
+   double bid = MarketInfo(g_symbol, MODE_BID);
+   double ask = MarketInfo(g_symbol, MODE_ASK);
+   int sl_pts = EffectiveSLPts();
+   double sl_dist = PtsPrice(sl_pts);
+
+   if(cur_sl <= 0.0)
+   {
+      double new_sl = (type == OP_BUY)
+         ? NormalizeDouble(open_price - sl_dist, g_digits)
+         : NormalizeDouble(open_price + sl_dist, g_digits);
+
+      int min_pts = BrokerMinDistancePts() + InpSLPadPts;
+      double min_d = PtsPrice(min_pts);
+      if(type == OP_BUY)
+      {
+         double floor_sl = NormalizeDouble(bid - min_d, g_digits);
+         if(new_sl > floor_sl) new_sl = floor_sl;
+      }
+      else
+      {
+         double ceil_sl = NormalizeDouble(ask + min_d, g_digits);
+         if(new_sl < ceil_sl) new_sl = ceil_sl;
+      }
+
+      if(!OrderModify(ticket, open_price, new_sl, 0, 0, clrRed))
+         Print("IDC_V: guardian set SL fail err=", GetLastError());
+      return;
+   }
+
+   if(g_trail_armed)
+      return;
+
+   int cur_sl_pts = 0;
+   if(type == OP_BUY)  cur_sl_pts = PricePts(open_price - cur_sl);
+   if(type == OP_SELL) cur_sl_pts = PricePts(cur_sl - open_price);
+
+   int need = BrokerMinDistancePts() + InpSLPadPts;
+   if(cur_sl_pts > 0 && cur_sl_pts < need)
+   {
+      double new_sl = (type == OP_BUY)
+         ? NormalizeDouble(open_price - PtsPrice(need), g_digits)
+         : NormalizeDouble(open_price + PtsPrice(need), g_digits);
+      bool widen = (type == OP_BUY && new_sl < cur_sl) || (type == OP_SELL && new_sl > cur_sl);
+      if(widen)
+      {
+         if(!OrderModify(ticket, open_price, new_sl, 0, 0, clrRed))
+            Print("IDC_V: guardian widen fail err=", GetLastError());
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+bool CloseTicket(const int ticket)
+{
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+      return false;
+   double price = (OrderType() == OP_BUY) ? MarketInfo(g_symbol, MODE_BID)
+                                          : MarketInfo(g_symbol, MODE_ASK);
+   ResetLastError();
+   bool ok = OrderClose(ticket, OrderLots(), price, SlippageRaw(), clrAqua);
+   if(!ok)
+      Print("IDC_V: close fail #", ticket, " err=", GetLastError());
+   return ok;
+}
+
+bool CloseOurPosition()
+{
+   int ticket = FindPositionTicket();
+   if(ticket < 0) return false;
+   return CloseTicket(ticket);
+}
+
+//+------------------------------------------------------------------+
+void DrawPanel()
 {
    if(!InpShowPanel)
    {
       Comment("");
       return;
    }
-
+   int tf = Period();
+   string tf_s = (tf == PERIOD_M5) ? "M5" : ("TF?" + IntegerToString(tf));
+   int half = EffectiveHalfGapPts();
    string s = "";
-   s += "IDC_V | " + g_symbol + " M5\n";
-   s += "Broker GMT: " + (g_gmt_offset_hours >= 0 ? "+" : "") + IntegerToString(g_gmt_offset_hours) + "\n";
+   s += "IDC_V v2.00 | " + g_symbol + " " + tf_s + "\n";
+   s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
    s += "Point: " + DoubleToStr(g_point, g_digits) + " | Spread: " + IntegerToString(SpreadPoints()) + " pts\n";
-   s += "Session: " + (in_session ? "OPEN" : "CLOSED");
+   s += "Session: " + (IsWithinTradingHours() ? "OPEN" : "CLOSED");
    s += " | DailyLoss: " + (g_daily_loss_hit ? "HIT" : "ok") + "\n";
-   s += "Pos: " + IntegerToString(CountOurPositions());
-   s += " | Pending: " + IntegerToString(CountOurPendings()) + "\n";
-   s += "SL: " + IntegerToString(InpSLPoints) + " pts";
-   s += " | TrailStart: " + IntegerToString(InpTrailStartPts);
-   s += " / Step: " + IntegerToString(InpTrailStepPts) + "\n";
-   s += "Lot: " + (InpUseAutoLot ? "AUTO" : "FIXED") + " | TrailArmed: " + (g_trail_armed ? "Y" : "N");
+   s += "Gap set: " + IntegerToString(InpStopLineGapPts) + " | half now: " + IntegerToString(half);
+   s += " | SL: " + IntegerToString(EffectiveSLPts()) + " pts\n";
+   s += "Trail: " + IntegerToString(InpTrailStartPts) + "/" + IntegerToString(InpTrailStepPts);
+   s += " | Pos: " + IntegerToString(CountOurPositions());
+   s += " Pending: " + IntegerToString(CountOurPendings()) + "\n";
+   s += "Lot: " + (InpUseAutoLot ? "AUTO" : "FIXED");
+   s += " | Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
+   s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N");
    Comment(s);
 }
 

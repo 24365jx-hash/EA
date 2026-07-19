@@ -1,9 +1,9 @@
-; IDC_V default preset — Gold (XAUUSD) M5 optimized
+; IDC_V v2.00 — Gold M5 defaults (docs/IDC_V_전략서.md v1.0)
 InpUseAutoLot=true
 InpRiskPercent=1.0
 InpFixedLot=0.01
 InpMaxLot=5.0
-InpEntryOffsetPts=95
+InpStopLineGapPts=200
 InpSLPoints=150
 InpMinEntryGapPts=20
 InpTrailStartPts=200
@@ -21,6 +21,7 @@ InpEndMinuteGMT=0
 InpCloseOutsideHrs=false
 InpDailyLossPercent=5.0
 InpStopOnDailyLoss=true
+InpCloseOnDailyLoss=false
 InpAutoDetectSymbol=true
 InpForcedSymbol=
 InpMagic=260719

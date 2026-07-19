@@ -1,29 +1,24 @@
 # IDC_V (MT4)
 
-MT4 Expert Advisor: **Buy Stop / Sell Stop** straddle on **XAUUSD M5**, with OCO, trailing (no TP), SL Guardian, session filter, and daily loss limit.
+XAUUSD **M5** BuyStop/SellStop straddle EA.
+
+- **전략서(스펙 락):** [`docs/IDC_V_전략서.md`](docs/IDC_V_전략서.md) v1.0  
+- **EA:** `MQL4/Experts/IDC_V.mq4` v2.00  
+- **프리셋:** `MQL4/Presets/IDC_V_XAUUSD_M5.set`
 
 ## Install
 
-1. Copy `MQL4/Experts/IDC_V.mq4` into your terminal `MQL4/Experts/` folder.
-2. Compile in MetaEditor.
-3. Attach to **XAUUSD M5** chart (AutoTrading ON).
-4. Optional: load `MQL4/Presets/IDC_V_XAUUSD_M5.set`.
+1. `IDC_V.mq4` → terminal `MQL4/Experts/`
+2. MetaEditor compile
+3. Attach to **XAUUSD M5** (AutoTrading ON)
+4. Optional: load the preset
 
-## Defaults (Gold-oriented, all distances in points)
+## Defaults (points)
 
 | Param | Default |
 |-------|---------|
-| Entry offset | 95 |
+| BuyStop↔SellStop gap | **200** |
 | SL | 150 |
-| Trailing start | 200 |
-| Trailing step | 10 |
-| Session (GMT) | 13:00–16:00 |
+| Trail start / step | 200 / 10 |
+| Session GMT | 13:00–16:00 |
 | Daily loss % | 5 |
-| AutoLot risk % | 1 |
-
-## Rules implemented
-
-1. One entry per M5 bar  
-2. First triggered stop keeps the trade; opposite pending is cancelled (OCO)  
-3. No re-entry until the position is fully closed  
-4. No TP — trailing start then step chase; SL user-configurable  
