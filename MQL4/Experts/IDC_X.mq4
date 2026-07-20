@@ -76,6 +76,8 @@ string   g_DashAngle            = "-";
 string   g_DashEntryReady       = "NO";
 string   g_DashLastAction       = "INIT";
 string   g_DashSLGuard          = "IDLE";
+string   g_DashTouchDiag        = "-";  // bar1 OHLC vs 50EMA 수치 진단
+bool     g_AntiBreakThisBar     = false;
 double   g_LastAngleDeg         = 0.0;
 double   g_LastRsi              = 0.0;
 double   g_LastEmaDistPts       = 0.0;
@@ -98,6 +100,7 @@ void   KillCycleObservationExceeded();
 bool   DetectEmaCross(int &dirOut);
 void   ProcessAntiBreakout(const double slowEma);
 bool   DetectPure50EmaTouch(const double slowEma);
+void   UpdateTouchDiagnostics(const double slowEma);
 bool   CheckEntrySetupBuy(const double fastEma, const double slowEma,
                           const double trendAngle, const double rsi1,
                           const double distPts);
@@ -453,10 +456,13 @@ void OnNewM1BarLogic()
    }
 
    //----- §4-1 Anti-Breakout (50EMA 몸통 돌파/침범 절대 불허 → 유예 소멸) -----
+   g_AntiBreakThisBar = false;
    ProcessAntiBreakout(slow1);
+   UpdateTouchDiagnostics(slow1);
 
    //----- §4-2 순수 터치 (돌파 아님: 몸통은 EMA 한쪽, 꼬리만 접촉) -----
-   if(!g_50EmaTouched)
+   // 당봉이 몸통 침범(안티브레이크)이면 터치 판정 금지 — 돌파를 터치로 오인 방지
+   if(!g_50EmaTouched && !g_AntiBreakThisBar)
       DetectPure50EmaTouch(slow1);
 
    if(g_50EmaTouched)
@@ -534,14 +540,15 @@ void ProcessAntiBreakout(const double slowEma)
    if(g_CycleDirection == 1)
    {
       // BUY: Open 또는 Close가 50EMA 미만으로 하향 침범 → 유예 강제 소멸
-      // 50EMA 몸통 돌파/침범 절대 불허
+      // 50EMA 몸통 돌파/침범 절대 불허 (= 순수 터치 절대 아님)
       if(o < slowEma || c < slowEma)
       {
-         g_50EmaTouched    = false;
-         g_GraceBarCounter = -1;
-         g_DashAntiBreak   = "RESET_BELOW_50";
-         g_DashTouch       = "KILLED_BREAKOUT";
-         g_DashLastAction  = "ANTI_BREAKOUT_BUY";
+         g_50EmaTouched     = false;
+         g_GraceBarCounter  = -1;
+         g_AntiBreakThisBar = true;
+         g_DashAntiBreak    = "RESET_BELOW_50";
+         g_DashTouch        = "KILLED_BREAKOUT";
+         g_DashLastAction   = "ANTI_BREAKOUT_BUY";
          return;
       }
       g_DashAntiBreak = "OK";
@@ -551,17 +558,62 @@ void ProcessAntiBreakout(const double slowEma)
       // SELL 대칭: Open 또는 Close가 50EMA 초과로 상향 침범 → 소멸
       if(o > slowEma || c > slowEma)
       {
-         g_50EmaTouched    = false;
-         g_GraceBarCounter = -1;
-         g_DashAntiBreak   = "RESET_ABOVE_50";
-         g_DashTouch       = "KILLED_BREAKOUT";
-         g_DashLastAction  = "ANTI_BREAKOUT_SELL";
+         g_50EmaTouched     = false;
+         g_GraceBarCounter  = -1;
+         g_AntiBreakThisBar = true;
+         g_DashAntiBreak    = "RESET_ABOVE_50";
+         g_DashTouch        = "KILLED_BREAKOUT";
+         g_DashLastAction   = "ANTI_BREAKOUT_SELL";
          return;
       }
       g_DashAntiBreak = "OK";
    }
    else
       g_DashAntiBreak = "-";
+}
+
+// bar1 시가/종가/저가/고가 vs 50EMA 수치를 대시보드·로그에 고정 출력 (논쟁 방지)
+void UpdateTouchDiagnostics(const double slowEma)
+{
+   double o = iOpen(g_TradeSymbol, PERIOD_M1, 1);
+   double c = iClose(g_TradeSymbol, PERIOD_M1, 1);
+   double h = iHigh(g_TradeSymbol, PERIOD_M1, 1);
+   double l = iLow(g_TradeSymbol, PERIOD_M1, 1);
+   int dig = DigitsSym();
+
+   string reason = "";
+   if(g_CycleDirection == 1)
+   {
+      if(o < slowEma || c < slowEma)
+         reason = "BODY_BELOW(돌파-터치불허)";
+      else if(l > slowEma)
+         reason = "LOW_ABOVE(미도달)";
+      else
+         reason = "PURE_OK(몸통위+저가접촉)";
+   }
+   else if(g_CycleDirection == -1)
+   {
+      if(o > slowEma || c > slowEma)
+         reason = "BODY_ABOVE(돌파-터치불허)";
+      else if(h < slowEma)
+         reason = "HIGH_BELOW(미도달)";
+      else
+         reason = "PURE_OK(몸통아래+고가접촉)";
+   }
+   else
+      reason = "NO_CYCLE";
+
+   g_DashTouchDiag =
+      "O=" + DoubleToStr(o, dig) +
+      " C=" + DoubleToStr(c, dig) +
+      " L=" + DoubleToStr(l, dig) +
+      " H=" + DoubleToStr(h, dig) +
+      " EMA50=" + DoubleToStr(slowEma, dig) +
+      " | L-EMA=" + DoubleToStr(l - slowEma, dig) +
+      " | " + reason;
+
+   Print("IDC_X|TOUCH_DIAG|", TimeToString(iTime(g_TradeSymbol, PERIOD_M1, 1), TIME_DATE|TIME_MINUTES),
+         "|", g_DashTouchDiag);
 }
 
 bool DetectPure50EmaTouch(const double slowEma)
