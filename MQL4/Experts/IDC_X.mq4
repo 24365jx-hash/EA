@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_X"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 //====================================================================
