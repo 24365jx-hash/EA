@@ -1165,6 +1165,7 @@ void UpdateDashboard()
    SetDashLine(r++, "T3", "50EMA Touch: " + g_DashTouch
                         + " | Grace: " + g_DashGrace
                         + " | AntiBreak: " + g_DashAntiBreak, touchC);
+   SetDashLine(r++, "T3b", "TouchDiag: " + g_DashTouchDiag, neuC);
 
    color fC = (StringFind(g_DashFastAbove, "OK") >= 0 ? okC :
               (StringFind(g_DashFastAbove, "FAIL") >= 0 ? badC : neuC));
