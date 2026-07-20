@@ -82,8 +82,6 @@ double   g_LastAngleDeg         = 0.0;
 double   g_LastRsi              = 0.0;
 double   g_LastEmaDistPts       = 0.0;
 
-uint     g_LastModifyAttemptMs  = 0;
-
 #define DASH_PREFIX "IDC_X_DASH_"
 #define ANGLE_EPS   0.0000001
 
