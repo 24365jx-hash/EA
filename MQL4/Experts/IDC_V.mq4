@@ -1,12 +1,13 @@
 //+------------------------------------------------------------------+
 //| IDC_V.mq4                                                         |
-//| Spec lock: docs/IDC_V_전략서.md v1.0                               |
+//| Spec lock: docs/IDC_V_전략서.md v1.1                               |
+//| Pending prices FIXED after place — NO reanchor / price chase      |
 //+------------------------------------------------------------------+
 #property copyright "IDC_V"
 #property link      ""
-#property version   "2.00"
+#property version   "2.01"
 #property strict
-#property description "IDC_V — XAUUSD M5 BuyStop/SellStop straddle. Spec: docs/IDC_V_전략서.md v1.0"
+#property description "IDC_V — fixed BuyStop/SellStop straddle. Spec v1.1 (no pending chase)"
 
 //==================== INPUTS (전략서 §7) ====================
 input string InpSecLot                 = "=== Lot ===";                 // 
@@ -125,10 +126,11 @@ int OnInit()
 
    SyncTicketsFromMarket();
 
-   Print("IDC_V v2.00 init | ", g_symbol,
+   Print("IDC_V v2.01 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
-         " gap=", InpStopLineGapPts, " sl=", InpSLPoints);
+         " gap=", InpStopLineGapPts, " sl=", InpSLPoints,
+         " | pending FIXED (no reanchor)");
    return INIT_SUCCEEDED;
 }
 
@@ -209,9 +211,9 @@ void OnTick()
    }
    else
    {
-      // §1.4 re-anchor same setup (not a new entry)
-      ReanchorStraddle();
-      EnforceOCO(); // safety if somehow a fill raced
+      // v1.1 §1.4: pending prices stay FIXED — never reanchor/chase market
+      // Only OCO safety if a fill raced between ticks
+      EnforceOCO();
    }
 
    DrawPanel();
@@ -668,60 +670,6 @@ bool PlaceStraddle()
 }
 
 //+------------------------------------------------------------------+
-//| §1.4 Re-anchor pending to current price (same setup)              |
-//+------------------------------------------------------------------+
-void ReanchorStraddle()
-{
-   if(CountOurPositions() > 0)
-      return;
-   if(g_buy_stop_ticket < 0 || g_sell_stop_ticket < 0)
-      SyncTicketsFromMarket();
-   if(g_buy_stop_ticket < 0 || g_sell_stop_ticket < 0)
-      return;
-
-   double buy_px, sell_px, buy_sl, sell_sl;
-   int sl_pts, half_pts;
-   if(!BuildStraddlePrices(buy_px, sell_px, buy_sl, sell_sl, sl_pts, half_pts))
-      return;
-
-   // modify buy stop
-   if(OrderSelect(g_buy_stop_ticket, SELECT_BY_TICKET, MODE_TRADES))
-   {
-      if(OrderType() == OP_BUYSTOP)
-      {
-         if(MathAbs(OrderOpenPrice() - buy_px) >= g_point ||
-            MathAbs(OrderStopLoss() - buy_sl) >= g_point)
-         {
-            if(!OrderModify(g_buy_stop_ticket, buy_px, buy_sl, 0, 0, clrDodgerBlue))
-            {
-               int err = GetLastError();
-               if(err != 0 && err != 1) // 1 = no-change / unknown result on some builds
-                  Print("IDC_V: reanchor buy fail err=", err);
-            }
-         }
-      }
-   }
-
-   // modify sell stop
-   if(OrderSelect(g_sell_stop_ticket, SELECT_BY_TICKET, MODE_TRADES))
-   {
-      if(OrderType() == OP_SELLSTOP)
-      {
-         if(MathAbs(OrderOpenPrice() - sell_px) >= g_point ||
-            MathAbs(OrderStopLoss() - sell_sl) >= g_point)
-         {
-            if(!OrderModify(g_sell_stop_ticket, sell_px, sell_sl, 0, 0, clrOrangeRed))
-            {
-               int err = GetLastError();
-               if(err != 0 && err != 1)
-                  Print("IDC_V: reanchor sell fail err=", err);
-            }
-         }
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
 //| §3.3 Trailing                                                     |
 //+------------------------------------------------------------------+
 void ManageTrailing()
@@ -883,7 +831,7 @@ void DrawPanel()
    string tf_s = (tf == PERIOD_M5) ? "M5" : ("TF?" + IntegerToString(tf));
    int half = EffectiveHalfGapPts();
    string s = "";
-   s += "IDC_V v2.00 | " + g_symbol + " " + tf_s + "\n";
+   s += "IDC_V v2.01 | " + g_symbol + " " + tf_s + " | PENDING FIXED\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
    s += "Point: " + DoubleToStr(g_point, g_digits) + " | Spread: " + IntegerToString(SpreadPoints()) + " pts\n";
    s += "Session: " + (IsWithinTradingHours() ? "OPEN" : "CLOSED");

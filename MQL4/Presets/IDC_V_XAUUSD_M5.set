@@ -1,4 +1,4 @@
-; IDC_V v2.00 — Gold M5 defaults (docs/IDC_V_전략서.md v1.0)
+; IDC_V v2.01 — Gold M5 defaults (docs/IDC_V_전략서.md v1.1) FIXED pending
 InpUseAutoLot=true
 InpRiskPercent=1.0
 InpFixedLot=0.01
