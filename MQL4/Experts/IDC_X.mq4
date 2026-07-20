@@ -154,7 +154,7 @@ int OnInit()
    if(!SymbolSelect(g_TradeSymbol, true) && g_SymbolReady)
       Print("IDC_X|WARN|SymbolSelect failed for ", g_TradeSymbol);
 
-   g_LastM1BarTime = iTime(g_TradeSymbol, PERIOD_M1, 0);
+   g_LastM1BarTime = 0; // 버그수정: 0으로 둬 첫 틱에 직전 완성봉(bar1) 즉시 검수 (중간에 EA 부착 시 터치봉 누락 방지)
    ResetCycleFull("INIT");
    g_DashLastAction = "INIT_OK";
 
@@ -445,7 +445,10 @@ void OnNewM1BarLogic()
    if(g_CycleDirection == 0 || g_IsTradedInCycle)
    {
       g_DashEntryReady = "NO";
-      if(g_IsTradedInCycle) g_DashLastAction = "SIGNAL_CONSUMED";
+      // 버그수정: ENTRY_OK를 다음 봉에서 SIGNAL_CONSUMED로 덮어쓰던 문제
+      if(g_IsTradedInCycle && StringFind(g_DashLastAction, "ENTRY_OK") != 0 &&
+         StringFind(g_DashLastAction, "ENTRY_FAIL") != 0)
+         g_DashLastAction = "SIGNAL_CONSUMED";
       g_DashAntiBreak = "-";
       g_DashFastAbove = "-";
       g_DashCandleQuality = "-";
@@ -495,11 +498,20 @@ void OnNewM1BarLogic()
    //----- §4-4 진입 집행 (신호 즉시 소진) -----
    if(ready)
    {
-      // 체결 성공 여부와 무관하게 신호 소진 (§3-2)
-      g_IsTradedInCycle = true;
-      bool ok = ExecuteMarketEntry(g_CycleDirection);
-      g_DashLastAction = (ok ? "ENTRY_OK_" : "ENTRY_FAIL_") + DirName(g_CycleDirection);
-      g_DashEntryReady = (ok ? "FIRED" : "FAIL");
+      // 버그수정: 기존 포지션 때문에 OrderSend조차 안 했는데 신호 소진하던 결함 제거
+      if(HasOurPosition())
+      {
+         g_DashLastAction = "ENTRY_BLOCKED_OPEN_POS";
+         g_DashEntryReady = "BLOCKED";
+      }
+      else
+      {
+         // 체결 성공 여부와 무관하게 신호 소진 (§3-2) — 실제 진입 시도 시에만
+         g_IsTradedInCycle = true;
+         bool ok = ExecuteMarketEntry(g_CycleDirection);
+         g_DashLastAction = (ok ? "ENTRY_OK_" : "ENTRY_FAIL_") + DirName(g_CycleDirection);
+         g_DashEntryReady = (ok ? "FIRED" : "FAIL");
+      }
    }
 }
 
@@ -540,30 +552,47 @@ void ProcessAntiBreakout(const double slowEma)
    if(g_CycleDirection == 1)
    {
       // BUY: Open 또는 Close가 50EMA 미만으로 하향 침범 → 유예 강제 소멸
-      // 50EMA 몸통 돌파/침범 절대 불허 (= 순수 터치 절대 아님)
       if(o < slowEma || c < slowEma)
       {
+         bool hadGrace = (g_50EmaTouched && g_GraceBarCounter >= 1);
          g_50EmaTouched     = false;
          g_GraceBarCounter  = -1;
-         g_AntiBreakThisBar = true;
+         g_AntiBreakThisBar = true; // 몸통 침범봉 = 순수터치 불가
          g_DashAntiBreak    = "RESET_BELOW_50";
-         g_DashTouch        = "KILLED_BREAKOUT";
-         g_DashLastAction   = "ANTI_BREAKOUT_BUY";
+         // 버그수정: 유예가 없을 때 KILLED/ANTI_BREAKOUT으로 오인 표시하던 문제
+         if(hadGrace)
+         {
+            g_DashTouch      = "KILLED_BREAKOUT";
+            g_DashLastAction = "ANTI_BREAKOUT_BUY";
+         }
+         else
+         {
+            g_DashTouch      = "NO_TOUCH";
+            g_DashLastAction = "BODY_BELOW_50";
+         }
          return;
       }
       g_DashAntiBreak = "OK";
    }
    else if(g_CycleDirection == -1)
    {
-      // SELL 대칭: Open 또는 Close가 50EMA 초과로 상향 침범 → 소멸
       if(o > slowEma || c > slowEma)
       {
+         bool hadGrace = (g_50EmaTouched && g_GraceBarCounter >= 1);
          g_50EmaTouched     = false;
          g_GraceBarCounter  = -1;
          g_AntiBreakThisBar = true;
          g_DashAntiBreak    = "RESET_ABOVE_50";
-         g_DashTouch        = "KILLED_BREAKOUT";
-         g_DashLastAction   = "ANTI_BREAKOUT_SELL";
+         if(hadGrace)
+         {
+            g_DashTouch      = "KILLED_BREAKOUT";
+            g_DashLastAction = "ANTI_BREAKOUT_SELL";
+         }
+         else
+         {
+            g_DashTouch      = "NO_TOUCH";
+            g_DashLastAction = "BODY_ABOVE_50";
+         }
          return;
       }
       g_DashAntiBreak = "OK";
@@ -784,15 +813,7 @@ double CalcEmaDistancePoints(const int shift)
 //====================================================================
 bool ExecuteMarketEntry(const int dir)
 {
-   if(HasOurPosition())
-   {
-      Print("IDC_X|ENTRY|skip already in position");
-      return(false);
-   }
-
    RefreshRates();
-   double point = GetPointSize();
-   int    dig   = DigitsSym();
    double lots  = InpLots;
    double minLot = MarketInfo(g_TradeSymbol, MODE_MINLOT);
    double maxLot = MarketInfo(g_TradeSymbol, MODE_MAXLOT);
@@ -800,7 +821,15 @@ bool ExecuteMarketEntry(const int dir)
    if(lotStep <= 0.0) lotStep = 0.01;
    lots = MathMax(minLot, MathMin(maxLot, lots));
    lots = MathFloor(lots / lotStep + 1e-9) * lotStep;
-   lots = NormalizeDouble(lots, 2);
+   // 버그수정: NormalizeDouble(...,2) 고정 → lotstep 자릿수에 맞춤
+   int lotDigits = 0;
+   double stepTmp = lotStep;
+   while(lotDigits < 8 && MathAbs(stepTmp - MathRound(stepTmp)) > 1e-8)
+   {
+      stepTmp *= 10.0;
+      lotDigits++;
+   }
+   lots = NormalizeDouble(lots, lotDigits);
 
    int cmd = (dir > 0 ? OP_BUY : OP_SELL);
    double price = (dir > 0 ? AskP() : BidP());
@@ -958,10 +987,13 @@ bool EnsureInitialSL(const int ticket)
 
 bool ModifySLSafe(const int ticket, const double newSL)
 {
+   // 버그수정: 성공 건까지 전역 250ms 쓰로틀 → 실패 재시도에만 간격 적용
+   static int    s_lastFailTicket = -1;
+   static uint   s_lastFailMs     = 0;
    uint now = GetTickCount();
-   if(g_LastModifyAttemptMs != 0 && (now - g_LastModifyAttemptMs) < (uint)InpSLGuardianRetryMs)
+   if(s_lastFailTicket == ticket && s_lastFailMs != 0 &&
+      (now - s_lastFailMs) < (uint)InpSLGuardianRetryMs)
       return(false);
-   g_LastModifyAttemptMs = now;
 
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
       return(false);
@@ -1009,8 +1041,12 @@ bool ModifySLSafe(const int ticket, const double newSL)
       int err = GetLastError();
       Print("IDC_X|SL|OrderModify fail ticket=", ticket, " err=", err, " sl=", sl);
       g_DashSLGuard = "ERR " + IntegerToString(err);
+      s_lastFailTicket = ticket;
+      s_lastFailMs = now;
       return(false);
    }
+   s_lastFailTicket = -1;
+   s_lastFailMs = 0;
    return(true);
 }
 
