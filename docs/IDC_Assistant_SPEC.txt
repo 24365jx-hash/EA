@@ -1,0 +1,143 @@
+================================================================================
+IDC_Assistant — SYSTEM SPECIFICATION (원본전략 확정본)
+MT4 전용 화면 패널 EA | SL + Trailing | TP 없음
+버전: 1.00
+================================================================================
+
+§0 목적
+  수동/반자동 진입 보조 패널. BUY/SELL 버튼으로 시장가 진입하고,
+  패널에 설정한 SL·트레일링으로 포지션을 관리한다. TP는 사용하지 않는다.
+
+§1 시스템 환경
+  1-1. MT4 전용 (#property strict, OrderSend/OrderModify/OrderClose)
+  1-2. 모든 파라미터 수치 단위 = 포인트(Point) 통일 (pip 미사용)
+  1-3. TP = 항상 0 (진입·수정 모두)
+  1-4. 브로커 심볼 자동감지:
+       - 차트 Symbol() 우선 거래심볼
+       - Point/Digits/StopLevel/FreezeLevel/LotStep/MinLot/MaxLot/
+         TickSize/TickValue/TradeAllowed 자동 취득
+       - 차트 심볼 호가 불가 시 접미사 변형 스캔
+  1-5. 브로커 시간 자동감지:
+       - 차트 Period() 감지
+       - TimeCurrent()-TimeGMT() → GMT 오프셋(분) 산출·패널 표시
+
+§2 입력 파라미터 (전략/패널)
+  [패널 UI]
+    InpPanelX, InpPanelY           — 패널 좌상단 좌표
+    InpPanelWidth, InpPanelHeight  — 패널 크기(사용자 설정)
+    InpColorBg, InpColorBorder     — 배경/테두리 색
+    InpColorText, InpColorEditBg   — 텍스트/입력칸 배경
+    InpColorBuy, InpColorSell      — BUY/SELL 버튼 색
+    InpColorClose, InpColorAccent  — 일괄청산/강조 색
+    InpFontSize                    — 글자 크기
+
+  [거래 기본값 — 패널 런타임에도 동일 키로 편집]
+    InpSLPoints            — 초기 SL 거리(포인트)
+    InpTrailingStartPts    — 트레일링 시작(포인트)
+    InpTrailingStepPts     — 트레일링 스텝(포인트)
+    InpLots                — 수동 랏
+    InpLotModeAuto         — true=자동랏 / false=수동랏
+    InpRiskPercent         — 자동랏 시 잔고 대비 위험%
+    InpMagicNumber         — 매직
+    InpSlippagePts         — 슬리피지(포인트)
+    InpTradeComment        — 주문 코멘트 접두
+
+  [심볼/시간]
+    InpAutoDetectSymbol    — 심볼 스펙 자동감지 ON
+    InpManualSymbol        — 비우면 차트심볼, 지정 시 강제
+
+  [SL 가디언]
+    InpSLGuardianOn        — ON/OFF
+    InpSLGuardianRetryMs   — OrderModify 실패 재시도 간격(ms)
+
+§3 패널 UI 구성 (필수 컨트롤) — 심플 전용
+  3-1. 표시/편집: SL / Trailing Start / Trailing Step / Lots
+  3-2. 버튼: BUY / SELL / 일괄 청산(초고속) / MANUAL↔AUTO
+  3-3. 타이틀: IDC_Assistant
+  3-4. 금지: 심볼/TF/GMT/포지션수/가디언상태/액션로그 등 잡다 문구 패널 표시
+  3-5. 화면 크기·컬러는 §2 사용자 입력으로 적용
+  3-6. 패널 Edit는 클릭 입력 가능. ENDEDIT 시 즉시 런타임 반영·정규화 재표시
+  3-7. 매 틱 SyncPanelEditsToRuntime으로 편집값 지속 반영 (BUY/SELL/트레일/가디언 사용)
+
+§4 진입
+  4-1. BUY 버튼 → 시장가 OP_BUY (Ask), TP=0, SL=규칙 §6/§7
+  4-2. SELL 버튼 → 시장가 OP_SELL (Bid), TP=0, SL=규칙 §6/§7
+  4-3. 랏:
+       - MANUAL: 패널 Lots 값
+       - AUTO: RiskPercent 기반
+         lots = (Balance * Risk%/100) / money_per_lot_for_SL
+         money_per_lot = (SL_points * Point / TickSize) * TickValue
+         → MinLot/MaxLot/LotStep 정규화
+  4-4. 매직·코멘트로 본 EA 포지션만 관리
+
+§5 트레일링 (원본 예시 100% 매핑)
+  기준가 BasePrice = §6/§7에서 결정된 참조 진입가
+  5-1. 수익포인트 profitPts:
+       BUY  = (Bid - BasePrice) / Point
+       SELL = (BasePrice - Ask) / Point
+  5-2. profitPts < TrailingStart → 트레일 미가동 (초기 SL 유지)
+  5-3. 1차 가동 (Start 도달 즉시):
+       BUY  newSL = BasePrice + Start*Point
+       SELL newSL = BasePrice - Start*Point
+       예: Start=200 → 진입(기준)가로부터 200포인트 지점으로 SL 이동
+  5-4. 이후 Floor 스텝 추격:
+       steps = floor( (profitPts - Start) / Step )
+       BUY  newSL = BasePrice + Start*Point + steps*Step*Point
+       SELL newSL = BasePrice - Start*Point - steps*Step*Point
+       예: Step=10 → 최초 200포인트 지점부터 10포인트 간격 추격
+  5-5. 유리 방향만 수정 (BUY: newSL>curSL / SELL: newSL<curSL)
+  5-6. TP는 절대 설정·변경하지 않음 (0 유지)
+
+§6 물타기(DCA) — 동일 절대가 SL/트레일
+  6-1. 정의 (동일 방향 추가 진입):
+       BUY  추가진입가 < 최초(최오래된) 진입가 → 물타기
+       SELL 추가진입가 > 최초(최오래된) 진입가 → 물타기
+  6-2. 최초 포지션 = 동일 심볼·매직·방향 중 OrderOpenTime 최소
+  6-3. BasePrice = 최초 포지션 OrderOpenPrice (모든 DCA+최초 공통)
+  6-4. 초기 SL (모든 DCA+최초 동일 절대가):
+       BUY  SL = BasePrice - SLPoints*Point
+       SELL SL = BasePrice + SLPoints*Point
+  6-5. 트레일: §5를 공통 BasePrice로 계산한 newSL을
+       최초+모든 물타기 포지션에 동일 가격으로 적용
+  6-6. 진입 가격이 달라도 SL·트레일 절대 가격은 동일해야 함
+
+§7 불타기(피라미딩) — 각자 진입가 기준
+  7-1. 정의:
+       BUY  추가진입가 > 최초 진입가 → 불타기
+       SELL 추가진입가 < 최초 진입가 → 불타기
+  7-2. BasePrice = 해당 포지션 자신의 OrderOpenPrice
+  7-3. 초기 SL:
+       BUY  SL = OwnOpen - SLPoints*Point
+       SELL SL = OwnOpen + SLPoints*Point
+  7-4. 트레일: §5를 각자 BasePrice로 독립 적용
+  7-5. 불타기 포지션끼리도 서로 다른 SL/트레일 가격 허용
+
+§8 혼합 포지션 규칙
+  8-1. 최초 + 물타기 그룹: 공통 BasePrice(최초가)로 §6
+  8-2. 불타기 포지션: 각자 §7 (그룹과 독립)
+  8-3. 방향이 다르면 별도 관리 (BUY군 / SELL군 분리)
+
+§9 SL 가디언
+  9-1. 매 틱: 본 EA 포지션 SL==0 이면 §6/§7 초기 SL 강제 주입
+  9-2. OrderModify 시 STOPLEVEL/FREEZELEVEL 보정
+  9-3. 스프레드·호가 갱신(RefreshRates) 후 재시도
+  9-4. 실패 티켓만 RetryMs 간격 재시도 (성공 건 전역 쓰로틀 금지)
+  9-5. 불리한 SL 후퇴 수정 금지 (초기 SL=0 주입 제외)
+
+§10 일괄 청산 (초고속 — 구현 가능 최속)
+  10-1. 본 EA 매직·거래심볼 시장가 포지션 전량 즉시 청산
+  10-2. 티켓 스냅샷 후 처리 (Select-by-pos 붕괴 방지)
+  10-3. 헤지 계좌: 반대포지션 OrderCloseBy 우선 (왕복 최소화)
+  10-4. 잔여: 패스당 RefreshRates 1회 + 상향 슬리피지(최소 100pts) OrderClose
+  10-5. 청산 루프 내 Print 금지 / 다회 패스(최대 32) / TradeContextBusy 최소대기
+  10-6. 청산 중 가디언·트레일 일시정지 (g_ClosingAll)
+  10-7. TP/대기주문 아님 — OrderCloseBy + OrderClose만
+
+§11 비기능
+  11-1. 자동 시그널 진입 없음 (버튼만)
+  11-2. 지표 의존 없음
+  11-3. 패널 Edit 변경값은 런타임 전역에 즉시 반영
+
+================================================================================
+END OF SPEC
+================================================================================
