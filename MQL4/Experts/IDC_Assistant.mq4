@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_Assistant"
 #property link      ""
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 //====================================================================
@@ -14,8 +14,8 @@
 input string InpSepPanel         = "=== Panel UI ==="; // -
 input int    InpPanelX           = 20;                 // 패널 X
 input int    InpPanelY           = 30;                 // 패널 Y
-input int    InpPanelWidth       = 280;                // 패널 가로(px)
-input int    InpPanelHeight      = 270;                // 패널 세로(px)
+input int    InpPanelWidth       = 300;                // 패널 가로(px)
+input int    InpPanelHeight      = 280;                // 패널 세로(px)
 input color  InpColorBg          = C'24,28,36';         // 배경색
 input color  InpColorBorder      = C'70,80,95';         // 테두리색
 input color  InpColorText        = C'230,235,240';     // 텍스트색
@@ -69,12 +69,20 @@ bool     g_ClosingAll         = false;    // 초고속 청산 중 가디언/트�
 #define OBJ_TITLE      PANEL_PREFIX "TITLE"
 #define OBJ_LBL_SL     PANEL_PREFIX "LBL_SL"
 #define OBJ_EDT_SL     PANEL_PREFIX "EDT_SL"
+#define OBJ_BTN_SL_M   PANEL_PREFIX "BTN_SL_M"
+#define OBJ_BTN_SL_P   PANEL_PREFIX "BTN_SL_P"
 #define OBJ_LBL_TS     PANEL_PREFIX "LBL_TS"
 #define OBJ_EDT_TS     PANEL_PREFIX "EDT_TS"
-#define OBJ_LBL_STEP   PANEL_PREFIX "LBL_STEP" // Trailing Step 라벨 (TP 아님)
+#define OBJ_BTN_TS_M   PANEL_PREFIX "BTN_TS_M"
+#define OBJ_BTN_TS_P   PANEL_PREFIX "BTN_TS_P"
+#define OBJ_LBL_STEP   PANEL_PREFIX "LBL_STEP"
 #define OBJ_EDT_STEP   PANEL_PREFIX "EDT_STEP"
+#define OBJ_BTN_ST_M   PANEL_PREFIX "BTN_ST_M"
+#define OBJ_BTN_ST_P   PANEL_PREFIX "BTN_ST_P"
 #define OBJ_LBL_LOT    PANEL_PREFIX "LBL_LOT"
 #define OBJ_EDT_LOT    PANEL_PREFIX "EDT_LOT"
+#define OBJ_BTN_LOT_M  PANEL_PREFIX "BTN_LOT_M"
+#define OBJ_BTN_LOT_P  PANEL_PREFIX "BTN_LOT_P"
 #define OBJ_BTN_AUTO   PANEL_PREFIX "BTN_AUTO"
 #define OBJ_BTN_BUY    PANEL_PREFIX "BTN_BUY"
 #define OBJ_BTN_SELL   PANEL_PREFIX "BTN_SELL"
@@ -82,6 +90,8 @@ bool     g_ClosingAll         = false;    // 초고속 청산 중 가디언/트�
 
 #define CLOSE_MAX_PASSES 32
 #define CLOSE_SLIP_MIN   100   // 초고속 청산 최소 슬리피지(포인트)
+#define STEP_SL_TS       10    // 패널 +/- 기본 스텝(포인트)
+#define STEP_TRAIL_STEP  1     // Trail Step +/- 단위
 
 //====================================================================
 // 3) FORWARD DECLARATIONS
@@ -94,6 +104,8 @@ void   InitRuntimeFromInputs();
 void   SyncPanelEditsToRuntime();
 void   SyncRuntimeToPanelEdits();
 void   ApplyPanelEdit(const string objName);
+void   NudgePanelValue(const string btnName);
+void   PushRuntimeToEditFields();
 double NormalizeLots(double lots);
 double CalcAutoLots();
 double GetTradeLots();
@@ -212,6 +224,17 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
 
    SyncPanelEditsToRuntime();
+
+   // +/- 로 숫자 강제 조정 (Edit 입력 불가 환경 대비)
+   if(sparam == OBJ_BTN_SL_M || sparam == OBJ_BTN_SL_P ||
+      sparam == OBJ_BTN_TS_M || sparam == OBJ_BTN_TS_P ||
+      sparam == OBJ_BTN_ST_M || sparam == OBJ_BTN_ST_P ||
+      sparam == OBJ_BTN_LOT_M || sparam == OBJ_BTN_LOT_P)
+   {
+      NudgePanelValue(sparam);
+      ChartRedraw(0);
+      return;
+   }
 
    if(sparam == OBJ_BTN_BUY)
    {
@@ -1068,7 +1091,7 @@ double NormalizeP(const double price)
 }
 
 //====================================================================
-// 13) PANEL UI — SPEC §3, §2 크기/컬러
+// 13) PANEL UI — 숫자 입력 가능 (Edit + +/-) / 배경 클릭 가로채기 수정
 //====================================================================
 void SetRect(const string name, const int x, const int y, const int w, const int h,
              const color bg, const color border)
@@ -1084,7 +1107,9 @@ void SetRect(const string name, const int x, const int y, const int w, const int
    ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    ObjectSetInteger(0, name, OBJPROP_COLOR, border);
    ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   // ★ 핵심: BACK=true 아니면 Edit/버튼 클릭을 배경이 가로챔
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 0);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
@@ -1101,6 +1126,8 @@ void SetLabel(const string name, const int x, const int y, const string text,
    ObjectSetString(0, name, OBJPROP_FONT, "Arial");
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSz);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
@@ -1108,8 +1135,11 @@ void SetLabel(const string name, const int x, const int y, const string text,
 void SetEdit(const string name, const int x, const int y, const int w, const int h,
              const string text)
 {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_EDIT, 0, 0, 0);
+   // 기존 객체 속성 꼬임 방지: 삭제 후 재생성
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+   ObjectCreate(0, name, OBJ_EDIT, 0, 0, 0);
+
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
@@ -1122,7 +1152,9 @@ void SetEdit(const string name, const int x, const int y, const int w, const int
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, InpColorEditBg);
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, InpColorBorder);
    ObjectSetInteger(0, name, OBJPROP_ALIGN, ALIGN_CENTER);
-   ObjectSetInteger(0, name, OBJPROP_READONLY, false);
+   ObjectSetInteger(0, name, OBJPROP_READONLY, false);   // 입력 허용
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);       // 최상단
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
@@ -1130,8 +1162,10 @@ void SetEdit(const string name, const int x, const int y, const int w, const int
 void SetButton(const string name, const int x, const int y, const int w, const int h,
                const string text, const color bg)
 {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+   ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
@@ -1144,22 +1178,92 @@ void SetButton(const string name, const int x, const int y, const int w, const i
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, InpColorBorder);
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
 
+void PushRuntimeToEditFields()
+{
+   if(ObjectFind(0, OBJ_EDT_SL) >= 0)
+      ObjectSetString(0, OBJ_EDT_SL, OBJPROP_TEXT, IntegerToString(g_SLPoints));
+   if(ObjectFind(0, OBJ_EDT_TS) >= 0)
+      ObjectSetString(0, OBJ_EDT_TS, OBJPROP_TEXT, IntegerToString(g_TrailStartPts));
+   if(ObjectFind(0, OBJ_EDT_STEP) >= 0)
+      ObjectSetString(0, OBJ_EDT_STEP, OBJPROP_TEXT, IntegerToString(g_TrailStepPts));
+   if(ObjectFind(0, OBJ_EDT_LOT) >= 0)
+      ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(g_Lots, 2));
+}
+
+void NudgePanelValue(const string btnName)
+{
+   SyncPanelEditsToRuntime();
+
+   if(btnName == OBJ_BTN_SL_M)
+   {
+      g_SLPoints -= STEP_SL_TS;
+      if(g_SLPoints < 0) g_SLPoints = 0;
+   }
+   else if(btnName == OBJ_BTN_SL_P)
+   {
+      g_SLPoints += STEP_SL_TS;
+   }
+   else if(btnName == OBJ_BTN_TS_M)
+   {
+      g_TrailStartPts -= STEP_SL_TS;
+      if(g_TrailStartPts < 0) g_TrailStartPts = 0;
+   }
+   else if(btnName == OBJ_BTN_TS_P)
+   {
+      g_TrailStartPts += STEP_SL_TS;
+   }
+   else if(btnName == OBJ_BTN_ST_M)
+   {
+      g_TrailStepPts -= STEP_TRAIL_STEP;
+      if(g_TrailStepPts < 1) g_TrailStepPts = 1;
+   }
+   else if(btnName == OBJ_BTN_ST_P)
+   {
+      g_TrailStepPts += STEP_TRAIL_STEP;
+   }
+   else if(btnName == OBJ_BTN_LOT_M || btnName == OBJ_BTN_LOT_P)
+   {
+      if(g_LotModeAuto)
+         return; // AUTO면 수동 조정 불가
+      double step = MarketInfo(g_TradeSymbol, MODE_LOTSTEP);
+      if(step <= 0.0) step = 0.01;
+      if(btnName == OBJ_BTN_LOT_M)
+         g_Lots -= step;
+      else
+         g_Lots += step;
+      g_Lots = NormalizeLots(g_Lots);
+   }
+
+   PushRuntimeToEditFields();
+}
+
 void CreatePanel()
 {
+   // 이전 버전 잔존 객체/속성 꼬임 완전 제거 후 재생성
+   DestroyPanel();
+
    int x = InpPanelX;
    int y = InpPanelY;
    int w = InpPanelWidth;
    int h = InpPanelHeight;
-   if(w < 220) w = 220;
-   if(h < 250) h = 250;
+   if(w < 280) w = 280;
+   if(h < 260) h = 260;
 
-   int pad = 10;
-   int rowH = 24;
-   int editW = w - pad * 2 - 100;
+   int pad   = 10;
+   int rowH  = 26;
+   int labelW = 88;
+   int pmW   = 28;                 // +/- 버튼 폭
+   int autoW = 58;
+   int gap   = 3;
+   // Edit 폭 = 전체 - 좌패딩 - 라벨 - +/- - (Lots행 AUTO) - 우패딩
+   int editW = w - pad * 2 - labelW - (pmW + gap) * 2;
+   if(editW < 60) editW = 60;
    int btnW = (w - pad * 3) / 2;
    int fs = InpFontSize;
 
@@ -1167,29 +1271,39 @@ void CreatePanel()
 
    int cy = y + pad;
    SetLabel(OBJ_TITLE, x + pad, cy, "IDC_Assistant", InpColorAccent, fs + 3);
-   cy += rowH + 8;
+   cy += rowH + 6;
 
-   // SL
+   int ex = x + pad + labelW;
+
+   // SL: label | edit | - | +
    SetLabel(OBJ_LBL_SL, x + pad, cy + 4, "SL (pts)", InpColorText, fs);
-   SetEdit(OBJ_EDT_SL, x + pad + 100, cy, editW, rowH, IntegerToString(g_SLPoints));
-   cy += rowH + 6;
+   SetEdit(OBJ_EDT_SL, ex, cy, editW, rowH, IntegerToString(g_SLPoints));
+   SetButton(OBJ_BTN_SL_M, ex + editW + gap, cy, pmW, rowH, "-", InpColorBorder);
+   SetButton(OBJ_BTN_SL_P, ex + editW + gap + pmW + gap, cy, pmW, rowH, "+", InpColorAccent);
+   cy += rowH + 5;
 
-   // Trailing Start
+   // Trail Start
    SetLabel(OBJ_LBL_TS, x + pad, cy + 4, "Trail Start", InpColorText, fs);
-   SetEdit(OBJ_EDT_TS, x + pad + 100, cy, editW, rowH, IntegerToString(g_TrailStartPts));
-   cy += rowH + 6;
+   SetEdit(OBJ_EDT_TS, ex, cy, editW, rowH, IntegerToString(g_TrailStartPts));
+   SetButton(OBJ_BTN_TS_M, ex + editW + gap, cy, pmW, rowH, "-", InpColorBorder);
+   SetButton(OBJ_BTN_TS_P, ex + editW + gap + pmW + gap, cy, pmW, rowH, "+", InpColorAccent);
+   cy += rowH + 5;
 
-   // Trailing Step
+   // Trail Step
    SetLabel(OBJ_LBL_STEP, x + pad, cy + 4, "Trail Step", InpColorText, fs);
-   SetEdit(OBJ_EDT_STEP, x + pad + 100, cy, editW, rowH, IntegerToString(g_TrailStepPts));
-   cy += rowH + 6;
+   SetEdit(OBJ_EDT_STEP, ex, cy, editW, rowH, IntegerToString(g_TrailStepPts));
+   SetButton(OBJ_BTN_ST_M, ex + editW + gap, cy, pmW, rowH, "-", InpColorBorder);
+   SetButton(OBJ_BTN_ST_P, ex + editW + gap + pmW + gap, cy, pmW, rowH, "+", InpColorAccent);
+   cy += rowH + 5;
 
-   // Lots + AUTO toggle
+   // Lots: label | edit | - | + | AUTO  (edit 조금 축소)
+   int lotEditW = editW - autoW - gap;
+   if(lotEditW < 48) lotEditW = 48;
    SetLabel(OBJ_LBL_LOT, x + pad, cy + 4, "Lots", InpColorText, fs);
-   int lotEditW = editW - 70;
-   if(lotEditW < 50) lotEditW = 50;
-   SetEdit(OBJ_EDT_LOT, x + pad + 100, cy, lotEditW, rowH, DoubleToStr(g_Lots, 2));
-   SetButton(OBJ_BTN_AUTO, x + pad + 100 + lotEditW + 4, cy, 66, rowH,
+   SetEdit(OBJ_EDT_LOT, ex, cy, lotEditW, rowH, DoubleToStr(g_Lots, 2));
+   SetButton(OBJ_BTN_LOT_M, ex + lotEditW + gap, cy, pmW, rowH, "-", InpColorBorder);
+   SetButton(OBJ_BTN_LOT_P, ex + lotEditW + gap + pmW + gap, cy, pmW, rowH, "+", InpColorAccent);
+   SetButton(OBJ_BTN_AUTO, ex + lotEditW + gap + (pmW + gap) * 2, cy, autoW, rowH,
              g_LotModeAuto ? "AUTO" : "MANUAL", InpColorAccent);
    cy += rowH + 12;
 
@@ -1200,6 +1314,8 @@ void CreatePanel()
 
    // CLOSE ALL
    SetButton(OBJ_BTN_CLOSE, x + pad, cy, w - pad * 2, 32, "CLOSE ALL", InpColorClose);
+
+   ChartRedraw(0);
 }
 
 void DestroyPanel()
@@ -1209,10 +1325,13 @@ void DestroyPanel()
 
 void ApplyPanelEdit(const string objName)
 {
-   // Edit 확정 시 값 반영 + 정규화 재표시 (입력 가능 보장)
+   string s = "";
+
    if(objName == OBJ_EDT_SL)
    {
-      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_SL, OBJPROP_TEXT));
+      s = ObjectGetString(0, OBJ_EDT_SL, OBJPROP_TEXT);
+      StringTrimLeft(s); StringTrimRight(s);
+      int v = (int)StringToInteger(s);
       if(v < 0) v = 0;
       g_SLPoints = v;
       ObjectSetString(0, OBJ_EDT_SL, OBJPROP_TEXT, IntegerToString(g_SLPoints));
@@ -1220,7 +1339,9 @@ void ApplyPanelEdit(const string objName)
    }
    if(objName == OBJ_EDT_TS)
    {
-      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_TS, OBJPROP_TEXT));
+      s = ObjectGetString(0, OBJ_EDT_TS, OBJPROP_TEXT);
+      StringTrimLeft(s); StringTrimRight(s);
+      int v = (int)StringToInteger(s);
       if(v < 0) v = 0;
       g_TrailStartPts = v;
       ObjectSetString(0, OBJ_EDT_TS, OBJPROP_TEXT, IntegerToString(g_TrailStartPts));
@@ -1228,7 +1349,9 @@ void ApplyPanelEdit(const string objName)
    }
    if(objName == OBJ_EDT_STEP)
    {
-      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_STEP, OBJPROP_TEXT));
+      s = ObjectGetString(0, OBJ_EDT_STEP, OBJPROP_TEXT);
+      StringTrimLeft(s); StringTrimRight(s);
+      int v = (int)StringToInteger(s);
       if(v < 1) v = 1;
       g_TrailStepPts = v;
       ObjectSetString(0, OBJ_EDT_STEP, OBJPROP_TEXT, IntegerToString(g_TrailStepPts));
@@ -1238,13 +1361,14 @@ void ApplyPanelEdit(const string objName)
    {
       if(g_LotModeAuto)
       {
-         // AUTO 모드에서는 수동 랏 입력 무시 — 계산값 재표시
          double al = CalcAutoLots();
          g_Lots = al;
          ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
          return;
       }
-      double v = StringToDouble(ObjectGetString(0, OBJ_EDT_LOT, OBJPROP_TEXT));
+      s = ObjectGetString(0, OBJ_EDT_LOT, OBJPROP_TEXT);
+      StringTrimLeft(s); StringTrimRight(s);
+      double v = StringToDouble(s);
       if(v <= 0.0) v = InpLots;
       g_Lots = NormalizeLots(v);
       ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(g_Lots, 2));
@@ -1255,52 +1379,62 @@ void SyncPanelEditsToRuntime()
 {
    string s;
 
-   s = ObjectGetString(0, OBJ_EDT_SL, OBJPROP_TEXT);
-   if(s != "")
+   if(ObjectFind(0, OBJ_EDT_SL) >= 0)
    {
-      int v = (int)StringToInteger(s);
-      if(v >= 0) g_SLPoints = v;
+      s = ObjectGetString(0, OBJ_EDT_SL, OBJPROP_TEXT);
+      if(s != "")
+      {
+         int v = (int)StringToInteger(s);
+         if(v >= 0) g_SLPoints = v;
+      }
    }
 
-   s = ObjectGetString(0, OBJ_EDT_TS, OBJPROP_TEXT);
-   if(s != "")
+   if(ObjectFind(0, OBJ_EDT_TS) >= 0)
    {
-      int v = (int)StringToInteger(s);
-      if(v >= 0) g_TrailStartPts = v;
+      s = ObjectGetString(0, OBJ_EDT_TS, OBJPROP_TEXT);
+      if(s != "")
+      {
+         int v = (int)StringToInteger(s);
+         if(v >= 0) g_TrailStartPts = v;
+      }
    }
 
-   s = ObjectGetString(0, OBJ_EDT_STEP, OBJPROP_TEXT);
-   if(s != "")
+   if(ObjectFind(0, OBJ_EDT_STEP) >= 0)
    {
-      int v = (int)StringToInteger(s);
-      if(v > 0) g_TrailStepPts = v;
+      s = ObjectGetString(0, OBJ_EDT_STEP, OBJPROP_TEXT);
+      if(s != "")
+      {
+         int v = (int)StringToInteger(s);
+         if(v > 0) g_TrailStepPts = v;
+      }
    }
 
-   s = ObjectGetString(0, OBJ_EDT_LOT, OBJPROP_TEXT);
-   if(s != "" && !g_LotModeAuto)
+   if(ObjectFind(0, OBJ_EDT_LOT) >= 0 && !g_LotModeAuto)
    {
-      double v = StringToDouble(s);
-      if(v > 0.0) g_Lots = v;
+      s = ObjectGetString(0, OBJ_EDT_LOT, OBJPROP_TEXT);
+      if(s != "")
+      {
+         double v = StringToDouble(s);
+         if(v > 0.0) g_Lots = v;
+      }
    }
 }
 
 void SyncRuntimeToPanelEdits()
 {
-   ObjectSetString(0, OBJ_EDT_SL, OBJPROP_TEXT, IntegerToString(g_SLPoints));
-   ObjectSetString(0, OBJ_EDT_TS, OBJPROP_TEXT, IntegerToString(g_TrailStartPts));
-   ObjectSetString(0, OBJ_EDT_STEP, OBJPROP_TEXT, IntegerToString(g_TrailStepPts));
-   ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(g_Lots, 2));
-   ObjectSetString(0, OBJ_BTN_AUTO, OBJPROP_TEXT, g_LotModeAuto ? "AUTO" : "MANUAL");
+   PushRuntimeToEditFields();
+   if(ObjectFind(0, OBJ_BTN_AUTO) >= 0)
+      ObjectSetString(0, OBJ_BTN_AUTO, OBJPROP_TEXT, g_LotModeAuto ? "AUTO" : "MANUAL");
 }
 
 void RefreshAutoLotDisplay()
 {
-   // AUTO 모드에서만 랏 칸 갱신 (MANUAL 입력 중 덮어쓰기 금지)
    if(!g_LotModeAuto)
       return;
    double al = CalcAutoLots();
    g_Lots = al;
-   ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
+   if(ObjectFind(0, OBJ_EDT_LOT) >= 0)
+      ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
 }
 
 //+------------------------------------------------------------------+
