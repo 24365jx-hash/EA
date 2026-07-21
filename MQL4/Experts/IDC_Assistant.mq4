@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_Assistant"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 //====================================================================
@@ -15,7 +15,7 @@ input string InpSepPanel         = "=== Panel UI ==="; // -
 input int    InpPanelX           = 20;                 // 패널 X
 input int    InpPanelY           = 30;                 // 패널 Y
 input int    InpPanelWidth       = 280;                // 패널 가로(px)
-input int    InpPanelHeight      = 360;                // 패널 세로(px)
+input int    InpPanelHeight      = 270;                // 패널 세로(px)
 input color  InpColorBg          = C'24,28,36';         // 배경색
 input color  InpColorBorder      = C'70,80,95';         // 테두리색
 input color  InpColorText        = C'230,235,240';     // 텍스트색
@@ -60,15 +60,13 @@ int      g_TrailStepPts       = 10;
 double   g_Lots               = 0.10;
 bool     g_LotModeAuto        = false;
 
-string   g_StatusLine         = "INIT";
-string   g_GuardStatus        = "IDLE";
-string   g_LastAction         = "-";
 string   g_ModeTag            = "MANUAL";
+string   g_GuardStatus        = "IDLE";   // 저널/내부용 (패널 미표시)
+bool     g_ClosingAll         = false;    // 초고속 청산 중 가디언/트레일 일시정지
 
 #define PANEL_PREFIX   "IDC_A_PNL_"
 #define OBJ_BG         PANEL_PREFIX "BG"
 #define OBJ_TITLE      PANEL_PREFIX "TITLE"
-#define OBJ_INFO       PANEL_PREFIX "INFO"
 #define OBJ_LBL_SL     PANEL_PREFIX "LBL_SL"
 #define OBJ_EDT_SL     PANEL_PREFIX "EDT_SL"
 #define OBJ_LBL_TS     PANEL_PREFIX "LBL_TS"
@@ -81,10 +79,9 @@ string   g_ModeTag            = "MANUAL";
 #define OBJ_BTN_BUY    PANEL_PREFIX "BTN_BUY"
 #define OBJ_BTN_SELL   PANEL_PREFIX "BTN_SELL"
 #define OBJ_BTN_CLOSE  PANEL_PREFIX "BTN_CLOSE"
-#define OBJ_STATUS     PANEL_PREFIX "STATUS"
-#define OBJ_GUARD      PANEL_PREFIX "GUARD"
 
-#define CLOSE_MAX_PASSES 8
+#define CLOSE_MAX_PASSES 32
+#define CLOSE_SLIP_MIN   100   // 초고속 청산 최소 슬리피지(포인트)
 
 //====================================================================
 // 3) FORWARD DECLARATIONS
@@ -96,11 +93,11 @@ void   DetectTimeframeAndBrokerTime();
 void   InitRuntimeFromInputs();
 void   SyncPanelEditsToRuntime();
 void   SyncRuntimeToPanelEdits();
+void   ApplyPanelEdit(const string objName);
 double NormalizeLots(double lots);
 double CalcAutoLots();
 double GetTradeLots();
 bool   IsOurOrder();
-int    CountOurOrders(const int typeFilter);
 bool   FindBaseOrder(const int type, int &outTicket, double &outOpenPrice, datetime &outOpenTime);
 int    ClassifyAddMode(const int type, const double entryPrice);
 // returns: 0=BASE(first/equal), 1=DCA(물타기), 2=PYRAMID(불타기)
@@ -112,6 +109,7 @@ bool   EnsureInitialSL(const int ticket);
 bool   ModifySLSafe(const int ticket, const double newSL);
 bool   ExecuteMarketEntry(const int type);
 int    CloseAllOurOrdersFast();
+int    CollectOurTickets(int &tickets[], int &types[], double &lots[]);
 double GetPointSize();
 double PointsToPrice(const int pts);
 int    PriceToPoints(const double priceDiff);
@@ -121,7 +119,7 @@ int    DigitsSym();
 double NormalizeP(const double price);
 void   CreatePanel();
 void   DestroyPanel();
-void   UpdatePanelStatus();
+void   RefreshAutoLotDisplay();
 void   SetRect(const string name, const int x, const int y, const int w, const int h,
                const color bg, const color border);
 void   SetLabel(const string name, const int x, const int y, const string text,
@@ -141,7 +139,6 @@ int OnInit()
    if(!ResolveTradeSymbol())
    {
       Print("IDC_A|INIT|symbol resolve failed");
-      g_StatusLine = "SYMBOL FAIL";
    }
    else
    {
@@ -158,7 +155,6 @@ int OnInit()
 
    CreatePanel();
    SyncRuntimeToPanelEdits();
-   UpdatePanelStatus();
    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, false);
    return(INIT_SUCCEEDED);
 }
@@ -182,8 +178,11 @@ void OnTick()
 
    DetectTimeframeAndBrokerTime();
 
-   // 패널 Edit → 런타임 동기화 (매 틱 경량)
+   // 패널 Edit → 런타임 동기화 (매 틱)
    SyncPanelEditsToRuntime();
+
+   if(g_ClosingAll)
+      return; // 초고속 청산 중에는 가디언/트레일 스킵
 
    if(g_SymbolReady)
    {
@@ -192,11 +191,19 @@ void OnTick()
       ManageTrailingStops();
    }
 
-   UpdatePanelStatus();
+   RefreshAutoLotDisplay();
 }
 
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
+   // 패널 Edit 확정 시 즉시 반영 + 정규화 표기
+   if(id == CHARTEVENT_OBJECT_ENDEDIT)
+   {
+      ApplyPanelEdit(sparam);
+      ChartRedraw(0);
+      return;
+   }
+
    if(id != CHARTEVENT_OBJECT_CLICK)
       return;
 
@@ -208,18 +215,15 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
    if(sparam == OBJ_BTN_BUY)
    {
-      bool ok = ExecuteMarketEntry(OP_BUY);
-      g_LastAction = ok ? "BUY OK" : "BUY FAIL";
+      ExecuteMarketEntry(OP_BUY);
    }
    else if(sparam == OBJ_BTN_SELL)
    {
-      bool ok = ExecuteMarketEntry(OP_SELL);
-      g_LastAction = ok ? "SELL OK" : "SELL FAIL";
+      ExecuteMarketEntry(OP_SELL);
    }
    else if(sparam == OBJ_BTN_CLOSE)
    {
-      int n = CloseAllOurOrdersFast();
-      g_LastAction = "CLOSE " + IntegerToString(n);
+      CloseAllOurOrdersFast();
    }
    else if(sparam == OBJ_BTN_AUTO)
    {
@@ -232,10 +236,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          g_Lots = al;
          ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
       }
-      g_LastAction = "LOT " + g_ModeTag;
    }
 
-   UpdatePanelStatus();
    ChartRedraw(0);
 }
 
@@ -466,20 +468,6 @@ bool IsOurOrder()
    return(true);
 }
 
-int CountOurOrders(const int typeFilter)
-{
-   // typeFilter: -1=all, OP_BUY, OP_SELL
-   int n = 0;
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-   {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(!IsOurOrder()) continue;
-      if(typeFilter >= 0 && OrderType() != typeFilter) continue;
-      n++;
-   }
-   return(n);
-}
-
 bool FindBaseOrder(const int type, int &outTicket, double &outOpenPrice, datetime &outOpenTime)
 {
    // 최초 = OpenTime 최소 (동률 시 티켓 최소)
@@ -644,7 +632,6 @@ bool ExecuteMarketEntry(const int type)
          EnsureInitialSL(ticket);
    }
 
-   g_StatusLine = modeTag + " #" + IntegerToString(ticket);
    Print("IDC_A|ENTRY|ok ticket=", ticket, " mode=", modeTag, " lots=", lots, " sl=", sl);
    return(true);
 }
@@ -881,38 +868,152 @@ bool ModifySLSafe(const int ticket, const double newSL)
 }
 
 //====================================================================
-// 11) CLOSE ALL FAST — SPEC §10
+// 11) CLOSE ALL FAST — SPEC §10 (구현 가능 최속)
 //====================================================================
+int CollectOurTickets(int &tickets[], int &types[], double &lots[])
+{
+   ArrayResize(tickets, 0);
+   ArrayResize(types, 0);
+   ArrayResize(lots, 0);
+   int n = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!IsOurOrder()) continue;
+      int sz = n + 1;
+      ArrayResize(tickets, sz);
+      ArrayResize(types, sz);
+      ArrayResize(lots, sz);
+      tickets[n] = OrderTicket();
+      types[n]   = OrderType();
+      lots[n]    = OrderLots();
+      n++;
+   }
+   return(n);
+}
+
 int CloseAllOurOrdersFast()
 {
+   // 초고속 경로:
+   // 1) 티켓 스냅샷 (청산 중 Select-by-pos 붕괴 방지)
+   // 2) 헤지 반대포지션 OrderCloseBy 우선 (서버 왕복 1회/페어)
+   // 3) 잔여 시장가 OrderClose — 패스당 RefreshRates 1회, 루프 Print 없음
+   // 4) 슬리피지 상향으로 리쿼트 대기 최소화
+   // 5) 청산 중 가디언/트레일 정지
+   g_ClosingAll = true;
    int closed = 0;
+   int slip = InpSlippagePts;
+   if(slip < CLOSE_SLIP_MIN)
+      slip = CLOSE_SLIP_MIN;
+
+   int tickets[];
+   int types[];
+   double lots[];
+
    for(int pass = 0; pass < CLOSE_MAX_PASSES; pass++)
    {
-      int remain = 0;
-      // 역순 청산
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-      {
-         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-         if(!IsOurOrder()) continue;
+      int n = CollectOurTickets(tickets, types, lots);
+      if(n <= 0)
+         break;
 
-         int ticket = OrderTicket();
-         int type   = OrderType();
-         double lots = OrderLots();
-         RefreshRates();
-         double price = (type == OP_BUY) ? BidP() : AskP();
+      // --- OrderCloseBy 페어링 (동일 심볼 BUY↔SELL) — 더 이상 페어 없을 때까지 ---
+      for(int cb = 0; cb < n; cb++) // 상한: 스냅샷 수
+      {
+         int n2 = CollectOurTickets(tickets, types, lots);
+         if(n2 <= 0) break;
+
+         bool paired = false;
+         for(int i = 0; i < n2 && !paired; i++)
+         {
+            if(types[i] != OP_BUY && types[i] != OP_SELL) continue;
+            for(int j = i + 1; j < n2; j++)
+            {
+               if(types[j] == types[i]) continue;
+               if(types[j] != OP_BUY && types[j] != OP_SELL) continue;
+
+               int tClose = tickets[i];
+               int tBy    = tickets[j];
+               if(lots[j] < lots[i])
+               {
+                  tClose = tickets[j];
+                  tBy    = tickets[i];
+               }
+               ResetLastError();
+               if(OrderCloseBy(tClose, tBy, clrOrange))
+               {
+                  closed++;
+                  paired = true;
+                  break;
+               }
+            }
+         }
+         if(!paired)
+            break;
+      }
+
+      // 재수집 (CloseBy로 구성 변경)
+      n = CollectOurTickets(tickets, types, lots);
+      if(n <= 0)
+         break;
+
+      // --- 잔여 시장가 일괄 청산 ---
+      RefreshRates();
+      double bid = MarketInfo(g_TradeSymbol, MODE_BID);
+      double ask = MarketInfo(g_TradeSymbol, MODE_ASK);
+      if(bid <= 0.0) bid = Bid;
+      if(ask <= 0.0) ask = Ask;
+
+      int remain = 0;
+      for(int k = 0; k < n; k++)
+      {
+         // 무역 컨텍스트 점유 시 즉시 재시도(최소 대기)
+         int spin = 0;
+         while(IsTradeContextBusy() && spin < 50)
+         {
+            Sleep(1);
+            spin++;
+         }
+
+         double price = (types[k] == OP_BUY) ? bid : ask;
          ResetLastError();
-         bool ok = OrderClose(ticket, lots, price, InpSlippagePts, clrOrange);
-         if(ok)
+         if(OrderClose(tickets[k], lots[k], price, slip, clrOrange))
+         {
             closed++;
+            // 체결 후 호가 1회만 갱신(매 주문 Refresh 제거로 속도↑)
+            if((k & 3) == 3)
+            {
+               RefreshRates();
+               bid = MarketInfo(g_TradeSymbol, MODE_BID);
+               ask = MarketInfo(g_TradeSymbol, MODE_ASK);
+               if(bid <= 0.0) bid = Bid;
+               if(ask <= 0.0) ask = Ask;
+            }
+         }
          else
          {
             remain++;
-            Print("IDC_A|CLOSE|fail ticket=", ticket, " err=", GetLastError(), " pass=", pass);
+            int err = GetLastError();
+            // 리쿼트/가격변경 시 호가 갱신 후 다음 패스
+            if(err == 138 || err == 135 || err == 136)
+            {
+               RefreshRates();
+               bid = MarketInfo(g_TradeSymbol, MODE_BID);
+               ask = MarketInfo(g_TradeSymbol, MODE_ASK);
+               if(bid <= 0.0) bid = Bid;
+               if(ask <= 0.0) ask = Ask;
+            }
          }
       }
+
       if(remain == 0)
-         break;
+      {
+         // 잔여 재확인
+         if(CollectOurTickets(tickets, types, lots) == 0)
+            break;
+      }
    }
+
+   g_ClosingAll = false;
    return(closed);
 }
 
@@ -1054,7 +1155,7 @@ void CreatePanel()
    int w = InpPanelWidth;
    int h = InpPanelHeight;
    if(w < 220) w = 220;
-   if(h < 300) h = 300;
+   if(h < 250) h = 250;
 
    int pad = 10;
    int rowH = 24;
@@ -1066,9 +1167,7 @@ void CreatePanel()
 
    int cy = y + pad;
    SetLabel(OBJ_TITLE, x + pad, cy, "IDC_Assistant", InpColorAccent, fs + 3);
-   cy += rowH + 2;
-   SetLabel(OBJ_INFO, x + pad, cy, "SYM - | GMT -", InpColorText, fs);
-   cy += rowH + 4;
+   cy += rowH + 8;
 
    // SL
    SetLabel(OBJ_LBL_SL, x + pad, cy + 4, "SL (pts)", InpColorText, fs);
@@ -1101,16 +1200,55 @@ void CreatePanel()
 
    // CLOSE ALL
    SetButton(OBJ_BTN_CLOSE, x + pad, cy, w - pad * 2, 32, "CLOSE ALL", InpColorClose);
-   cy += 40;
-
-   SetLabel(OBJ_STATUS, x + pad, cy, "Status: -", InpColorText, fs);
-   cy += rowH;
-   SetLabel(OBJ_GUARD, x + pad, cy, "Guard: -", InpColorText, fs);
 }
 
 void DestroyPanel()
 {
    ObjectsDeleteAll(0, PANEL_PREFIX);
+}
+
+void ApplyPanelEdit(const string objName)
+{
+   // Edit 확정 시 값 반영 + 정규화 재표시 (입력 가능 보장)
+   if(objName == OBJ_EDT_SL)
+   {
+      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_SL, OBJPROP_TEXT));
+      if(v < 0) v = 0;
+      g_SLPoints = v;
+      ObjectSetString(0, OBJ_EDT_SL, OBJPROP_TEXT, IntegerToString(g_SLPoints));
+      return;
+   }
+   if(objName == OBJ_EDT_TS)
+   {
+      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_TS, OBJPROP_TEXT));
+      if(v < 0) v = 0;
+      g_TrailStartPts = v;
+      ObjectSetString(0, OBJ_EDT_TS, OBJPROP_TEXT, IntegerToString(g_TrailStartPts));
+      return;
+   }
+   if(objName == OBJ_EDT_STEP)
+   {
+      int v = (int)StringToInteger(ObjectGetString(0, OBJ_EDT_STEP, OBJPROP_TEXT));
+      if(v < 1) v = 1;
+      g_TrailStepPts = v;
+      ObjectSetString(0, OBJ_EDT_STEP, OBJPROP_TEXT, IntegerToString(g_TrailStepPts));
+      return;
+   }
+   if(objName == OBJ_EDT_LOT)
+   {
+      if(g_LotModeAuto)
+      {
+         // AUTO 모드에서는 수동 랏 입력 무시 — 계산값 재표시
+         double al = CalcAutoLots();
+         g_Lots = al;
+         ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
+         return;
+      }
+      double v = StringToDouble(ObjectGetString(0, OBJ_EDT_LOT, OBJPROP_TEXT));
+      if(v <= 0.0) v = InpLots;
+      g_Lots = NormalizeLots(v);
+      ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(g_Lots, 2));
+   }
 }
 
 void SyncPanelEditsToRuntime()
@@ -1155,36 +1293,14 @@ void SyncRuntimeToPanelEdits()
    ObjectSetString(0, OBJ_BTN_AUTO, OBJPROP_TEXT, g_LotModeAuto ? "AUTO" : "MANUAL");
 }
 
-void UpdatePanelStatus()
+void RefreshAutoLotDisplay()
 {
-   string sym = (g_TradeSymbol == "") ? "-" : g_TradeSymbol;
-   string info = sym
-                 + " | TF:" + IntegerToString(g_DetectedPeriod)
-                 + " | GMT:" + IntegerToString(g_BrokerGmtOffsetMin)
-                 + "m";
-   ObjectSetString(0, OBJ_INFO, OBJPROP_TEXT, info);
-
-   int buys = CountOurOrders(OP_BUY);
-   int sells = CountOurOrders(OP_SELL);
-   string st = "Pos B" + IntegerToString(buys) + "/S" + IntegerToString(sells)
-               + " | " + g_ModeTag
-               + " | " + g_LastAction
-               + " | " + g_StatusLine;
-   ObjectSetString(0, OBJ_STATUS, OBJPROP_TEXT, st);
-
-   string gd = "Guard: " + g_GuardStatus
-               + (InpSLGuardianOn ? " [ON]" : " [OFF]")
-               + " | SL=" + IntegerToString(g_SLPoints)
-               + " TS=" + IntegerToString(g_TrailStartPts)
-               + "/" + IntegerToString(g_TrailStepPts);
-   ObjectSetString(0, OBJ_GUARD, OBJPROP_TEXT, gd);
-
-   // AUTO 모드면 랏 표시 갱신
-   if(g_LotModeAuto)
-   {
-      double al = CalcAutoLots();
-      ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
-   }
+   // AUTO 모드에서만 랏 칸 갱신 (MANUAL 입력 중 덮어쓰기 금지)
+   if(!g_LotModeAuto)
+      return;
+   double al = CalcAutoLots();
+   g_Lots = al;
+   ObjectSetString(0, OBJ_EDT_LOT, OBJPROP_TEXT, DoubleToStr(al, 2));
 }
 
 //+------------------------------------------------------------------+

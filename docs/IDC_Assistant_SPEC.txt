@@ -50,12 +50,14 @@ MT4 전용 화면 패널 EA | SL + Trailing | TP 없음
     InpSLGuardianOn        — ON/OFF
     InpSLGuardianRetryMs   — OrderModify 실패 재시도 간격(ms)
 
-§3 패널 UI 구성 (필수 컨트롤)
+§3 패널 UI 구성 (필수 컨트롤) — 심플 전용
   3-1. 표시/편집: SL / Trailing Start / Trailing Step / Lots
-  3-2. 버튼: BUY / SELL / 일괄 청산(초고속)
-  3-3. 랏 모드 토글: MANUAL ↔ AUTO
-  3-4. 상태줄: 심볼, GMT오프셋, 가디언 상태, 마지막 액션
+  3-2. 버튼: BUY / SELL / 일괄 청산(초고속) / MANUAL↔AUTO
+  3-3. 타이틀: IDC_Assistant
+  3-4. 금지: 심볼/TF/GMT/포지션수/가디언상태/액션로그 등 잡다 문구 패널 표시
   3-5. 화면 크기·컬러는 §2 사용자 입력으로 적용
+  3-6. 패널 Edit는 클릭 입력 가능. ENDEDIT 시 즉시 런타임 반영·정규화 재표시
+  3-7. 매 틱 SyncPanelEditsToRuntime으로 편집값 지속 반영 (BUY/SELL/트레일/가디언 사용)
 
 §4 진입
   4-1. BUY 버튼 → 시장가 OP_BUY (Ask), TP=0, SL=규칙 §6/§7
