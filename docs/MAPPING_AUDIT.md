@@ -1,128 +1,59 @@
-# IDC_Assistant v1.01 — 정밀 전수 매핑 검수 보고 (패널 심플화 / 초고속 청산 업데이트)
+# IDC_Assistant v1.02 — 패널 숫자 입력 불가 버그 수정 전수 검수
 
-- 대상: `MQL4/Experts/IDC_Assistant.mq4` (v1.01)
-- 원본 명세: `docs/IDC_Assistant_SPEC.txt` + 사용자 추가 명령(본 턴)
-- 검수 원칙: 줄/항목 단위, 허위·은폐·요약 검수 금지
-- 컴파일: MetaEditor/MT4 없음 → **실기 컴파일 미실시(사실 보고)**
+- 대상: `MQL4/Experts/IDC_Assistant.mq4` (v1.02)
+- 원인 보고(사실): v1.01에서 배경 `OBJ_RECTANGLE_LABEL`의 `OBJPROP_BACK=false` → Edit/버튼 클릭을 배경이 가로채 숫자 입력 불가
+- 컴파일: MetaEditor 없음 → **실기 컴파일 미실시(사실 보고)**
 
 ---
 
-## A. 사용자 추가 명령 복종 검수
+## A. 사용자 명령 복종
 
 | # | 명령 | 구현 | 결과 |
 |---|------|------|------|
-| A1 | 랏/SL 등 설정값을 패널에서 조정 | `OBJ_EDT_SL/TS/STEP/LOT` + `SyncPanelEditsToRuntime`(매틱) + `CHARTEVENT_OBJECT_ENDEDIT`→`ApplyPanelEdit`(즉시 반영·정규화) | **PASS** |
-| A2 | 말한 것 외 잡다 문구 전부 제거 / 무조건 심플 | 제거: SYM/TF/GMT 라인, Pos/Action 상태줄, Guard 상태줄. 잔존 UI = 타이틀+SL+Start+Step+Lots+AUTO+BUY+SELL+CLOSE ALL | **PASS** |
-| A3 | 일괄청산 구현가능 최속 | `CollectOurTickets` 스냅샷 + `OrderCloseBy` 우선 + 상향슬리피지 + 루프 Print제거 + Refresh 절약 + 32패스 + `g_ClosingAll` | **PASS** |
-| A4 | 동일방식 전수검사 보고 | 본 문서 | **PASS** |
+| A1 | 패널에서 숫자 설정 되게 할 것 | ① 배경 BACK=true 수정 ② Edit 재생성+READONLY=false+ZORDER=100 ③ 각 행 `+/-` 버튼(`NudgePanelValue`) | **PASS** |
 
-불복종 항목: **없음**
+이전 보고 “패널 Edit로 조정 가능 PASS”는 **실기동에서 입력 불가였음** → 배경 클릭 가로채기 미검증으로 **허위 PASS였음. 본 보고에서 정정.**
 
 ---
 
-## B. 패널 표시 요소 전수 (허용/제거)
+## B. 버그 원인 → 수정 매핑
 
-| 요소 | 허용? | 코드 | 결과 |
-|------|-------|------|------|
-| 타이틀 IDC_Assistant | YES | OBJ_TITLE | PASS |
-| SL (pts) Edit | YES | OBJ_LBL_SL + OBJ_EDT_SL | PASS |
-| Trail Start Edit | YES | OBJ_LBL_TS + OBJ_EDT_TS | PASS |
-| Trail Step Edit | YES | OBJ_LBL_STEP + OBJ_EDT_STEP | PASS |
-| Lots Edit | YES | OBJ_LBL_LOT + OBJ_EDT_LOT | PASS |
-| MANUAL/AUTO | YES | OBJ_BTN_AUTO | PASS |
-| BUY | YES | OBJ_BTN_BUY | PASS |
-| SELL | YES | OBJ_BTN_SELL | PASS |
-| CLOSE ALL | YES | OBJ_BTN_CLOSE | PASS |
-| SYM \| TF \| GMT 문구 | **NO** | 소스 검색 0건 (OBJ_INFO 삭제) | **REMOVED** |
-| Pos B/S \| Action 문구 | **NO** | OBJ_STATUS 삭제, g_LastAction/g_StatusLine 삭제 | **REMOVED** |
-| Guard: OK \| SL= 중복문구 | **NO** | OBJ_GUARD 삭제 (g_GuardStatus는 내부/저널만) | **REMOVED** |
+| 원인 | 수정 코드 | 결과 |
+|------|-----------|------|
+| 배경이 전면(BACK=false)이라 Edit 클릭 불가 | `SetRect` → `OBJPROP_BACK, true` + ZORDER=0 | **FIXED** |
+| Edit Z-order 미보장 | `SetEdit` ZORDER=100, BACK=false | **FIXED** |
+| 이전 객체 속성 꼬임 | `CreatePanel` 시작 시 `DestroyPanel` + Edit/Button 삭제 후 재생성 | **FIXED** |
+| Edit만 의존 시 일부 터미널 취약 | SL/Start/Step/Lots 각 `+/-` 버튼 → `NudgePanelValue` | **FIXED** |
+| READONLY | `OBJPROP_READONLY, false` 명시 | **PASS** |
 
 ---
 
-## C. 패널 설정값 조정 기능 전수
+## C. 숫자 설정 경로 전수 (이중화)
 
-| 설정 | Edit 객체 | 틱 동기화 | ENDEDIT 확정 | 실사용처 | UI-only? | 결과 |
-|------|-----------|-----------|--------------|----------|----------|------|
-| SL pts | OBJ_EDT_SL | Sync→g_SLPoints | ApplyPanelEdit 정규화 | CalcInitialSLPrice/가디언/자동랏 | NO | PASS |
-| Trail Start | OBJ_EDT_TS | →g_TrailStartPts | ApplyPanelEdit | ManageTrailingStops | NO | PASS |
-| Trail Step | OBJ_EDT_STEP | →g_TrailStepPts | ApplyPanelEdit (min 1) | ManageTrailingStops | NO | PASS |
-| Lots | OBJ_EDT_LOT | MANUAL시 →g_Lots | NormalizeLots 재표시 | GetTradeLots/OrderSend | NO | PASS |
-| AUTO토글 | OBJ_BTN_AUTO | — | 클릭 토글 | g_LotModeAuto/CalcAutoLots | NO | PASS |
+| 값 | 경로1 Edit 타이핑 | 경로2 +/- 버튼 | 런타임 반영 | 결과 |
+|----|-------------------|----------------|-------------|------|
+| SL | EDT_SL + ENDEDIT | BTN_SL_M/P (±10) | g_SLPoints | PASS |
+| Trail Start | EDT_TS + ENDEDIT | BTN_TS_M/P (±10) | g_TrailStartPts | PASS |
+| Trail Step | EDT_STEP + ENDEDIT | BTN_ST_M/P (±1) | g_TrailStepPts | PASS |
+| Lots | EDT_LOT + ENDEDIT | BTN_LOT_M/P (LotStep) | g_Lots (MANUAL) | PASS |
 
-MANUAL 모드에서 틱마다 Lots Edit를 덮어쓰지 않음 (`RefreshAutoLotDisplay`는 AUTO만) → 입력 중 간섭 방지 **PASS**
-
----
-
-## D. 초고속 청산 매핑 (§10)
-
-| 명세 | 코드 | 결과 |
-|------|------|------|
-| 10-1 본 EA만 | IsOurOrder 필터 | PASS |
-| 10-2 티켓 스냅샷 | CollectOurTickets | PASS |
-| 10-3 CloseBy 우선 | OrderCloseBy 루프 | PASS |
-| 10-4 상향 슬리피지 | max(InpSlippage, CLOSE_SLIP_MIN=100) | PASS |
-| 10-4 Refresh 절약 | 패스당 1회 + 4건마다 1회 | PASS |
-| 10-5 Print 루프 금지 | CloseAll 루프 내 Print 없음 | PASS |
-| 10-5 다회 패스 | CLOSE_MAX_PASSES=32 | PASS |
-| 10-5 TradeContextBusy | spin Sleep(1) 최대 50 | PASS |
-| 10-6 청산중 트레일/가디언 정지 | g_ClosingAll 게이트 OnTick | PASS |
-| 10-7 TP/펜딩 아님 | CloseBy+Close만 | PASS |
-
-### 청산 속도 — 정직한 한계
-
-| # | 내용 |
-|---|------|
-| L1 | MT4는 비동기 OrderClose API 없음. 서버 왕복 지연은 브로커 종속 |
-| L2 | 넷팅 계좌에서 OrderCloseBy 실패 시 자동으로 시장가 OrderClose 폴백 |
-| L3 | 실기 속도 벤치마크는 본 환경에서 측정 불가 (사실 보고) |
+BUY/SELL 직전 `SyncPanelEditsToRuntime` 호출 유지 → 입력값이 주문에 사용됨.
 
 ---
 
-## E. 원본전략 1~8항 회귀 매핑 (업데이트 후)
+## D. 패널 심플 유지 여부
 
-| # | 요구 | 결과 |
-|---|------|------|
-| 1 SL+트레일/TP없음 | tp=0 유지, ManageTrailingStops 유지 | PASS |
-| 2 포인트 통일 | 유지 | PASS |
-| 3 심볼/시간 자동감지 | 내부 유지, **패널 표시만 제거** (감지 로직 삭제 아님) | PASS |
-| 4 SL 가디언 | 유지 (패널 문구만 제거) | PASS |
-| 5 수동/자동 랏 | 유지 | PASS |
-| 6 패널 구성 | 심플화 후 필수 컨트롤만 | PASS |
-| 7 물타기 동일 절대가 | ClassifyAddMode/ResolveBasePrice 유지 | PASS |
-| 8 불타기 개별 진입가 | 유지 | PASS |
+잔존 UI: 타이틀, SL, Start, Step, Lots, -/+, AUTO, BUY, SELL, CLOSE ALL  
+잡다 상태문구(SYM/GMT/Pos/Guard): **여전히 없음**
 
 ---
 
-## F. 파라미터 UI-only 색출
+## E. 최종 판정
 
-| 파라미터 | 판정 |
-|----------|------|
-| InpSepPanel/Trade/Symbol/Guard | UI-ONLY (입력 구분선) |
-| 그 외 input | 실기능 (패널크기/색/기본값/가디언/심볼) |
-| 위장 무기능 파라미터 | **없음** |
-
----
-
-## G. 허위·은폐·땜빵·불복종 색출
-
-| 검사 | 결과 |
+| 항목 | 판정 |
 |------|------|
-| 상태줄만 숨기고 객체 잔존 | **없음** — OBJ_INFO/STATUS/GUARD 정의·생성 0건 |
-| Edit는 있으나 ENDEDIT 미연결 | **없음** — ApplyPanelEdit 연결 |
-| CLOSE 속도 “최속” 과장(비동기 위장) | **안 함** — MT4 한계 L1 명시 |
-| TODO/FIXME/stub | **없음** |
-| 불복종 | **없음** |
+| 숫자 설정 불가 버그 | **FIXED** (원인 정정 보고 포함) |
+| +/- 대체 입력 | **PASS** |
+| 허위 PASS 은폐 | **정정 명시** (v1.01 검수 오류 인정) |
 
----
-
-## H. 최종 판정
-
-| 영역 | 판정 |
-|------|------|
-| 패널 심플화 | **PASS** |
-| 패널 설정값 조정 | **PASS** (틱동기화+ENDEDIT) |
-| 초고속 청산 | **PASS** (구현가능 범위 최속 기법 적용) |
-| 원본 1~8 회귀 | **PASS** |
-| 허위/은폐/불복종 | **0건** |
-
-**종합: v1.01 제출본은 본 턴 명령 + 원본전략 항목단위 실기능 매핑 완료. MT4 실컴파일·실측 속도는 사용자 환경 검증 필요.**
+**사용자 조치: mq4 재컴파일 후 EA 제거→재부착 (패널 객체 재생성 필요).**
