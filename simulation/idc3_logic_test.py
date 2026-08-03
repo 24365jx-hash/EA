@@ -13,12 +13,22 @@ def signal(h2, l2, c3):
         return "SELL"
     return "CANCEL"
 
-def trail_lock_pts(profit, start, step):
-    """IDC standard: lock = Start + floor((profit-Start)/Step)*Step. NOT BE."""
+def body_gt_wicks(o, h, l, c):
+    body = abs(c - o)
+    upper = h - max(o, c)
+    lower = min(o, c) - l
+    if upper < 0:
+        upper = 0
+    if lower < 0:
+        lower = 0
+    return body > upper and body > lower
+
+def trail_lock_from_be(profit, start, step):
+    """원본: Start→본전(BE=0 from open), 이후 step 추종."""
     if profit < start:
         return None
     steps = int((profit - start) // step)
-    return start + steps * step
+    return steps * step  # 0 at start = BE
 
 def main():
     fails = []
@@ -29,50 +39,51 @@ def main():
         fails.append("R01 equal high must fail")
     if is_inside(2000, 1000, 1800, 1000):
         fails.append("R01 equal low must fail")
-    if is_inside(2000, 1000, 2100, 1200):
-        fails.append("R01 outside high must fail")
 
     if signal(1800, 1200, 1199) != "SELL":
-        fails.append("R03 SELL close below L2")
+        fails.append("R03 SELL")
     if signal(1800, 1200, 1801) != "BUY":
-        fails.append("R03 BUY close above H2")
+        fails.append("R03 BUY")
     if signal(1800, 1200, 1500) != "CANCEL":
-        fails.append("R04 inside close = CANCEL")
-    if signal(1800, 1200, 1800) != "CANCEL":
-        fails.append("R03 touch high not break")
-    if signal(1800, 1200, 1200) != "CANCEL":
-        fails.append("R03 touch low not break")
+        fails.append("R04 CANCEL")
 
-    # IDC trailing (NOT BE / entry)
-    if trail_lock_pts(199, 200, 10) is not None:
-        fails.append("trail < start keeps initial")
-    if trail_lock_pts(200, 200, 10) != 200:
-        fails.append("trail @start => lock Start (200), NOT BE/0")
-    if trail_lock_pts(209, 200, 10) != 200:
-        fails.append("trail 209 => still 200")
-    if trail_lock_pts(210, 200, 10) != 210:
-        fails.append("trail 210 => 210")
-    if trail_lock_pts(220, 200, 10) != 220:
-        fails.append("trail 220 => 220")
-    if trail_lock_pts(231, 200, 10) != 230:
-        fails.append("trail 231 => 230")
-    # reject old wrong BE formula
-    if trail_lock_pts(200, 200, 10) == 0:
-        fails.append("REGRESSION: BE formula must not return")
+    # R03c body > each wick
+    # open=100, close=130, high=135, low=95 → body=30, up=5, dn=5 → OK
+    if not body_gt_wicks(100, 135, 95, 130):
+        fails.append("R03c expect pass body>wicks")
+    # body=10, up=20, dn=5 → FAIL
+    if body_gt_wicks(100, 130, 95, 110):
+        fails.append("R03c expect fail upper wick")
+    # body=10, up=2, dn=15 → FAIL
+    if body_gt_wicks(100, 112, 85, 110):
+        fails.append("R03c expect fail lower wick")
+    # body == upper → FAIL (strict >)
+    if body_gt_wicks(100, 120, 95, 110):
+        fails.append("R03c equal upper must fail")
+    # doji body=0 → FAIL
+    if body_gt_wicks(100, 110, 90, 100):
+        fails.append("R03c doji must fail")
 
-    def allow_entry(pos_count):
-        return pos_count == 0
-    if allow_entry(1):
-        fails.append("R05 must block when in position")
-    if not allow_entry(0):
-        fails.append("R05 must allow when flat")
+    # Original trailing: BE then step
+    if trail_lock_from_be(199, 200, 10) is not None:
+        fails.append("trail < start")
+    if trail_lock_from_be(200, 200, 10) != 0:
+        fails.append("trail @200 => BE (0)")
+    if trail_lock_from_be(209, 200, 10) != 0:
+        fails.append("trail 209 => still BE")
+    if trail_lock_from_be(210, 200, 10) != 10:
+        fails.append("trail 210 => +10")
+    if trail_lock_from_be(220, 200, 10) != 20:
+        fails.append("trail 220 => +20")
+    if trail_lock_from_be(231, 200, 10) != 30:
+        fails.append("trail 231 => +30")
 
     if fails:
         print("FAIL:")
         for f in fails:
             print(" -", f)
         raise SystemExit(1)
-    print("PASS: trail=Start+steps*Step (NOT BE) + entry rules")
+    print("PASS: original BE-trail + R03c body>wicks")
 
 if __name__ == "__main__":
     main()

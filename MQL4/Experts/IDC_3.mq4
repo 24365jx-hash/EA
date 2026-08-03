@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -15,8 +15,8 @@ input string InpManualSymbol           = "";                        // Manual sy
 
 input string InpSecRisk                = "=== SL / Trailing (points) ==="; // 
 input int    InpStopLossPoints         = 500;                       // Initial SL (points, mandatory)
-input int    InpTrailingStartPts       = 200;                       // 1차 SL 본전(=Start 수익 잠금) 트리거
-input int    InpTrailingStepPts        = 10;                        // 1차 이후 Floor 계단 스텝 (points)
+input int    InpTrailingStartPts       = 200;                       // 수익 Start 도달 → SL을 진입가(본전)로
+input int    InpTrailingStepPts        = 10;                        // 본전 이후 가격 추종 스텝 (points)
 
 input string InpSecLot                 = "=== Lot ===";             // 
 input bool   InpUseAutoLot             = false;                     // Auto lot ON/OFF
@@ -64,6 +64,8 @@ string   g_last_signal;        // NONE / BUY / SELL / CANCEL
 string   g_last_block;         // human reason
 
 #define OBJ_PFX "IDC3_"
+
+bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -124,7 +126,7 @@ int OnInit()
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.00 init | ", g_symbol,
+   Print("IDC_3 v1.01 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -243,7 +245,10 @@ void EvaluateInsideBarSetup()
    double l1 = iLow (g_symbol, PERIOD_M1, 3);
    double h2 = iHigh(g_symbol, PERIOD_M1, 2);
    double l2 = iLow (g_symbol, PERIOD_M1, 2);
+   double o3 = iOpen (g_symbol, PERIOD_M1, 1);
    double c3 = iClose(g_symbol, PERIOD_M1, 1);
+   double h3 = iHigh (g_symbol, PERIOD_M1, 1);
+   double l3 = iLow  (g_symbol, PERIOD_M1, 1);
 
    // R01: #2 completely inside #1 AND smaller. Candle colors IGNORED.
    // Strict containment => automatically smaller range.
@@ -272,8 +277,7 @@ void EvaluateInsideBarSetup()
       if(InpDebugLog)
          Print("IDC_3: CANCEL setup. inside OK but Close1=", c3,
                " inside H2=", h2, " L2=", l2,
-               " (wicks ignored; H3=", iHigh(g_symbol, PERIOD_M1, 1),
-               " L3=", iLow(g_symbol, PERIOD_M1, 1), ")");
+               " (wicks H3=", h3, " L3=", l3, ")");
       return;
    }
 
@@ -282,6 +286,20 @@ void EvaluateInsideBarSetup()
    {
       g_last_signal = "CANCEL";
       g_last_block = "dual break impossible";
+      return;
+   }
+
+   // R03c: 돌파 마감 캔들 #3 — 몸통이 위·아래 심지보다 무조건 커야 함
+   if(!IsBodyLargerThanWicks(o3, h3, l3, c3))
+   {
+      double body = MathAbs(c3 - o3);
+      double up_w = h3 - MathMax(o3, c3);
+      double dn_w = MathMin(o3, c3) - l3;
+      g_last_signal = "CANCEL";
+      g_last_block = "bar3 body<=wick";
+      if(InpDebugLog)
+         Print("IDC_3: CANCEL #3 body filter. body=", body,
+               " upW=", up_w, " dnW=", dn_w);
       return;
    }
 
@@ -294,6 +312,19 @@ void EvaluateInsideBarSetup()
             " H1=", h1, " L1=", l1, " H2=", h2, " L2=", l2, " C3=", c3);
 
    OpenMarket(dir, h2, l2);
+}
+
+//+------------------------------------------------------------------+
+//| #3 돌파봉: body > upper_wick AND body > lower_wick (strict)         |
+//+------------------------------------------------------------------+
+bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c)
+{
+   double body = MathAbs(c - o);
+   double upper = h - MathMax(o, c);
+   double lower = MathMin(o, c) - l;
+   if(upper < 0.0) upper = 0.0;
+   if(lower < 0.0) lower = 0.0;
+   return (body > upper && body > lower);
 }
 
 //+------------------------------------------------------------------+
@@ -367,9 +398,9 @@ bool OpenMarket(const int dir, const double h2, const double l2)
 }
 
 //+------------------------------------------------------------------+
-//| Trailing — IDC 표준 (본전=1차 Start 수익 잠금, BE/진입가 이동 아님)  |
-//| profit>=Start → SL = Open ± Start                                  |
-//| 이후 SL = Open ± (Start + floor((profit-Start)/Step)*Step)         |
+//| Trailing — 원본전략: Start 도달 시 SL→진입가(본전), 이후 Step 추종   |
+//| BUY: profit>=Start → SL=Open(BE); 추가수익 Step마다 SL += Step     |
+//| lock_from_BE = floor((profit-Start)/Step)*Step  (Start 시 0=본전)  |
 //+------------------------------------------------------------------+
 void ManageTrailing()
 {
@@ -391,17 +422,17 @@ void ManageTrailing()
    if(profit_pts < InpTrailingStartPts)
       return;
 
+   // 원본: Start 도달 → 본전(진입가). 이후 Step 단위로 추종.
    double extra = profit_pts - InpTrailingStartPts;
    int steps = (int)MathFloor(extra / InpTrailingStepPts + 1e-8);
    if(steps < 0) steps = 0;
-   // 1차: Start 수익 잠금 / 이후: Start + steps*Step
-   int lock_pts = InpTrailingStartPts + steps * InpTrailingStepPts;
+   int lock_from_be = steps * InpTrailingStepPts; // 0 = 진입가 본전
 
    double desired_sl;
    if(type == OP_BUY)
-      desired_sl = NormalizeDouble(open_price + PtsPrice(lock_pts), g_digits);
+      desired_sl = NormalizeDouble(open_price + PtsPrice(lock_from_be), g_digits);
    else
-      desired_sl = NormalizeDouble(open_price - PtsPrice(lock_pts), g_digits);
+      desired_sl = NormalizeDouble(open_price - PtsPrice(lock_from_be), g_digits);
 
    if(InpUseSLGuardian)
    {
@@ -820,20 +851,20 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.00 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.01 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
    s += "Session: " + (IsWithinTradingHours() ? "OPEN" : "CLOSED");
    s += " | DailyLoss: " + (g_daily_loss_hit ? "HIT" : "ok") + "\n";
    s += "SL: " + IntegerToString(EffectiveSLPts()) + " pts (set " + IntegerToString(InpStopLossPoints) + ")";
-   s += " | Trail: lock@" + IntegerToString(InpTrailingStartPts) + " step " + IntegerToString(InpTrailingStepPts) + "\n";
+   s += " | Trail: BE@" + IntegerToString(InpTrailingStartPts) + " step " + IntegerToString(InpTrailingStepPts) + "\n";
    s += "TP: NONE | Pos: " + IntegerToString(CountOurPositions());
    s += " | Lot: " + (InpUseAutoLot ? "AUTO" : "FIXED") + "\n";
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
    s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N") + "\n";
    s += "LastSignal: " + g_last_signal + " | " + g_last_block + "\n";
-   s += "Lines: #1 BLUE / #2 RED | candle color ignored\n";
+   s += "Lines: #1 BLUE / #2 RED | #3 body>wicks | color ignored\n";
    Comment(s);
 }
 

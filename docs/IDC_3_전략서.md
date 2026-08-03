@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.00
+## Spec lock v1.01
 
 | 항목 | 내용 |
 |------|------|
@@ -8,7 +8,7 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` v1.00 |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.01** |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ---
 
-## 2. 진입 규칙 (원본 1:1)
+## 2. 진입 규칙
 
 ### R01 — 인사이드 바
 - 캔들 #2 High < 캔들 #1 High
@@ -33,11 +33,18 @@
 ### R02 — 전제
 - R01 충족 시에만 이후 진행
 
-### R03 — 진입 트리거
+### R03 — 진입 트리거 (종가 돌파)
 - 캔들 #2의 **빨간** High/Low를 **종가**로 돌파한 방향 진입
 - Close > #2 High → **BUY**
 - Close < #2 Low  → **SELL**
 - 꼬리만 돌파하고 종가가 범위 안이면 **무효**
+
+### R03c — 돌파 마감 캔들 #3 몸통 조건 (**v1.01 추가**)
+- 돌파봉(#3) **몸통 > 위 심지** AND **몸통 > 아래 심지** (무조건)
+- `body = |Close−Open|`
+- `upper = High − max(Open,Close)`
+- `lower = min(Open,Close) − Low`
+- 미충족 시 **셋업 취소** (진입 없음)
 
 ### R04 — 타임아웃
 - #2 **직후 1봉(#3)** 만 유효
@@ -53,61 +60,37 @@
 
 ---
 
-## 3. 트레일링 (IDC 표준 — 진입가 BE 이동 아님)
+## 3. 트레일링 (최초 원본전략)
 
 예: Start=200, Step=10
 
 | 수익(points) | SL (BUY) |
 |--------------|----------|
 | < 200 | 초기 SL 유지 |
-| ≥ 200 | **Open + 200** (1차 본전 = Start 수익 잠금) |
-| ≥ 210 | Open + 210 |
-| ≥ 220 | Open + 220 |
-| … | Start + floor((profit−Start)/Step)×Step |
+| ≥ 200 | **진입가(본전/BE)** |
+| ≥ 210 | 본전 + 10 |
+| ≥ 220 | 본전 + 20 |
+| … | Step마다 추종 |
 
 공식 (BUY):  
-`lock = Start + floor((profit - Start) / Step) * Step`  
-`SL = Open + lock`  
-(SELL 대칭: `Open - lock`)
+`lock_from_BE = floor((profit − Start) / Step) × Step`  ← Start 시 **0 = 진입가**  
+`SL = Open + lock_from_BE`  
+(SELL 대칭)
 
-> “본전” = 진입가(BE)로 SL을 옮기는 것이 **아님**.  
-> IDC_X/A/V/8과 동일: **1차에 Start 포인트 수익을 잠그는 이동**.
+원문: Start 도달 시 SL을 **진입가(본전)** 으로 이동 후, Step 간격으로 가격 추종.
 
 ---
 
 ## 4. 봉 인덱싱 (신규 M1 봉 시점)
 
-| 전략 캔들 | iHigh/iLow/iClose shift |
-|-----------|-------------------------|
+| 전략 캔들 | shift |
+|-----------|-------|
 | #1 모캔들 | 3 |
 | #2 인사이드 | 2 |
 | #3 트리거 | 1 |
 
 ---
 
-## 5. 부가 기능 (원본 하단 스펙)
+## 5. 부가 기능
 
-| 기능 | 구현 |
-|------|------|
-| 단위 points | 전 파라미터 points, 브로커 digits 정규화 |
-| 심볼/타임존 자동 | Gold 심볼 탐지 + GMT offset |
-| SL Guardian | 스프레드·StopLevel 적응, SL=0 복구 |
-| 수동/자동 랏 | Fixed / Risk% |
-| 거래 시간 | GMT 세션 필터 |
-| 일일 최대 손실% | day-start equity 대비 |
-| Gold 기본값 | SL 500 / Trail 200·10 등 |
-
----
-
-## 6. 입력 파라미터 목록
-
-`InpAutoDetectGold`, `InpManualSymbol`,  
-`InpStopLossPoints`, `InpTrailingStartPts`, `InpTrailingStepPts`,  
-`InpUseAutoLot`, `InpFixedLot`, `InpRiskPercent`, `InpMaxLot`,  
-`InpUseSLGuardian`, `InpMaxSpreadPts`, `InpSpreadBufferPts`, `InpSLPadPts`,  
-`InpUseTimeFilter`, `InpStartHourGMT`, `InpStartMinuteGMT`, `InpEndHourGMT`, `InpEndMinuteGMT`,  
-`InpCloseOutsideHrs`, `InpDailyLossPercent`, `InpStopOnDailyLoss`, `InpCloseOnDailyLoss`,  
-`InpMagic`, `InpSlippagePts`, `InpTradeComment`,  
-`InpShowPanel`, `InpDrawSetupLines`, `InpDebugLog`
-
-섹션 구분용 `InpSec*` 문자열은 UI 그룹 라벨이며 로직 미사용(의도).
+단위 points / 심볼·타임존 자동 / SL Guardian / 수동·자동 랏 / 세션·일일손실% / Gold 기본값
