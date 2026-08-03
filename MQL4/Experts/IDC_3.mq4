@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.06  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.07  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.06"
+#property version   "1.07"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -86,6 +86,8 @@ bool IsBodyLargerThanWicks(const double o, const double h, const double l, const
 bool IsCloseBreakBuy (const double c3, const double h2);
 bool IsCloseBreakSell(const double c3, const double l2);
 void ReadBarOHLC(const int shift, double &o, double &h, double &l, double &c, datetime &t);
+bool IsProfitSideSL(const int type, const double open_price, const double sl);
+bool DetectTrailAlreadyLocked();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -148,11 +150,12 @@ int OnInit()
    g_last_block = "init";
    g_last_setup_dump = "";
 
-   // restart: if already in position, mark trail state fresh
+   // restart: recover trail-armed if SL already locks profit (do NOT reset to false blindly)
+   g_trail_armed = false;
    if(CountOurPositions() > 0)
-      g_trail_armed = false;
+      g_trail_armed = DetectTrailAlreadyLocked();
 
-   Print("IDC_3 v1.06 init | COLOR IGNORED | strict inside | body>each wick | ", g_symbol,
+   Print("IDC_3 v1.07 init | COLOR IGNORED | strict inside | body>each wick | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -250,31 +253,30 @@ void ReadBarOHLC(const int shift, double &o, double &h, double &l, double &c, da
 //+------------------------------------------------------------------+
 void EvaluateInsideBarSetup()
 {
-   datetime t1 = 0;
+   // shift: #3=1, #2=2, #1=3 — time vars named by candle role (not shift index)
    double o1, h1, l1, c1, o2, h2, l2, c2, o3, h3, l3, c3;
-   datetime t2, t3;
-   ReadBarOHLC(1, o3, h3, l3, c3, t1);
-   ReadBarOHLC(2, o2, h2, l2, c2, t2);
-   ReadBarOHLC(3, o1, h1, l1, c1, t3);
+   datetime t_trigger = 0, t_inside = 0, t_mother = 0;
+   ReadBarOHLC(1, o3, h3, l3, c3, t_trigger);
+   ReadBarOHLC(2, o2, h2, l2, c2, t_inside);
+   ReadBarOHLC(3, o1, h1, l1, c1, t_mother);
 
-   if(t1 <= 0)
+   if(t_trigger <= 0)
    {
       g_last_block = "no bar1";
       return;
    }
-   if(t1 == g_last_eval_bar1)
+   if(t_trigger == g_last_eval_bar1)
    {
       g_last_block = "already eval";
       return;
    }
-   g_last_eval_bar1 = t1;
+   g_last_eval_bar1 = t_trigger;
 
    g_last_setup_dump = StringFormat(
-      "#1 H%s L%s | #2 H%s L%s | #3 O%s H%s L%s C%s",
-      DoubleToStr(h1, g_digits), DoubleToStr(l1, g_digits),
-      DoubleToStr(h2, g_digits), DoubleToStr(l2, g_digits),
-      DoubleToStr(o3, g_digits), DoubleToStr(h3, g_digits),
-      DoubleToStr(l3, g_digits), DoubleToStr(c3, g_digits));
+      "#1 O%s H%s L%s C%s | #2 O%s H%s L%s C%s | #3 O%s H%s L%s C%s",
+      DoubleToStr(o1, g_digits), DoubleToStr(h1, g_digits), DoubleToStr(l1, g_digits), DoubleToStr(c1, g_digits),
+      DoubleToStr(o2, g_digits), DoubleToStr(h2, g_digits), DoubleToStr(l2, g_digits), DoubleToStr(c2, g_digits),
+      DoubleToStr(o3, g_digits), DoubleToStr(h3, g_digits), DoubleToStr(l3, g_digits), DoubleToStr(c3, g_digits));
 
    if(!IsWithinTradingHours())
    {
@@ -330,7 +332,7 @@ void EvaluateInsideBarSetup()
    }
 
    if(InpDrawSetupLines)
-      DrawSetupHL(h1, l1, h2, l2, t3, t2, t1);
+      DrawSetupHL(h1, l1, h2, l2, t_mother, t_inside, t_trigger);
 
    // R03: 종가 돌파만 (#2 기준). 색 무관.
    bool wick_only_buy  = (h3 > h2 && c3 <= h2);
@@ -651,10 +653,16 @@ void GuardOpenPositionSL()
       return;
    }
 
+   // Profit-side SL = trail already locked — NEVER widen back past entry (EA restart safety)
+   if(IsProfitSideSL(type, open_price, cur_sl))
+   {
+      g_trail_armed = true;
+      return;
+   }
    if(g_trail_armed)
       return;
 
-   // G05: widen SL if broker stop-level requires more distance (pre-trail only)
+   // G05: widen SL if broker stop-level requires more distance (pre-trail / loss-side SL only)
    int cur_sl_pts = 0;
    if(type == OP_BUY)  cur_sl_pts = PricePts(open_price - cur_sl);
    if(type == OP_SELL) cur_sl_pts = PricePts(cur_sl - open_price);
@@ -665,6 +673,9 @@ void GuardOpenPositionSL()
       double new_sl = (type == OP_BUY)
          ? NormalizeDouble(open_price - PtsPrice(need), g_digits)
          : NormalizeDouble(open_price + PtsPrice(need), g_digits);
+      // refuse if "widen" would move SL onto wrong side of entry after a trail
+      if(IsProfitSideSL(type, open_price, cur_sl))
+         return;
       bool widen = (type == OP_BUY && new_sl < cur_sl) || (type == OP_SELL && new_sl > cur_sl);
       if(widen)
       {
@@ -672,6 +683,28 @@ void GuardOpenPositionSL()
             Print("IDC_3: guardian widen fail err=", GetLastError());
       }
    }
+}
+
+//+------------------------------------------------------------------+
+bool IsProfitSideSL(const int type, const double open_price, const double sl)
+{
+   if(sl <= 0.0 || g_point <= 0.0)
+      return false;
+   if(type == OP_BUY)
+      return (sl > open_price + g_point * 0.1);
+   if(type == OP_SELL)
+      return (sl < open_price - g_point * 0.1);
+   return false;
+}
+
+bool DetectTrailAlreadyLocked()
+{
+   int ticket = FindPositionTicket();
+   if(ticket < 0)
+      return false;
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+      return false;
+   return IsProfitSideSL(OrderType(), OrderOpenPrice(), OrderStopLoss());
 }
 
 //+------------------------------------------------------------------+
@@ -1019,7 +1052,7 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.06 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.07 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";

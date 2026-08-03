@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.06
+## Spec lock v1.07
 
 | 항목 | 내용 |
 |------|------|
@@ -8,7 +8,7 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` **v1.06** |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.07** |
 
 ---
 
