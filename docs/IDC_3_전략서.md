@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.01
+## Spec lock v1.02
 
 | 항목 | 내용 |
 |------|------|
@@ -8,17 +8,26 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` **v1.01** |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.02** |
 
 ---
 
-## 1. 시각 규칙 (차트 라인 색)
+## 1. 시각 규칙 (셋업 라인)
 
-| 대상 | 라인 색 | 의미 |
-|------|---------|------|
-| 캔들 **#1** (모캔들) | **파란색** High/Low | 인사이드 판정 기준 범위 |
-| 캔들 **#2** (인사이드) | **빨간색** High/Low | **진입 돌파 기준** 범위 |
-| 캔들 **#1·#2 몸통 색** | **무관** | 양봉/음봉 모두 허용 |
+| 대상 | 기본 | 커스터마이즈 |
+|------|------|--------------|
+| 캔들 **#1** High/Low | 파랑 / Dash | `InpLine1Color`, `InpLine1Style` |
+| 캔들 **#2** High/Low | 빨강 / Dash | `InpLine2Color`, `InpLine2Style` |
+| 선 두께 | 1 | `InpLineWidth` (1–5) |
+| 표시 ON/OFF | ON | `InpDrawSetupLines` |
+
+### 표시 시간 범위 (v1.02)
+- **OBJ_TREND** 구간: 캔들 **#1 시각 → #3 시각**
+- `RAY_LEFT=false` → **#1보다 왼쪽(1캔들 이전 포함)에는 선 미표시**
+- `RAY_RIGHT=false` → #3 이후로 무한 연장 없음
+- 전차트 HLINE 폐기 → 셋업 구간만 보여 “어느 셋업인지” 식별 가능
+
+캔들 **#1·#2 몸통 색**은 진입 판정과 **무관**.
 
 ---
 

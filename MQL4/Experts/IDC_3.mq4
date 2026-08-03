@@ -1,12 +1,21 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.01  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.02  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
+
+enum ENUM_IDC3_LINE_STYLE
+  {
+   IDC3_LS_SOLID      = STYLE_SOLID,      // Solid
+   IDC3_LS_DASH       = STYLE_DASH,       // Dash
+   IDC3_LS_DOT        = STYLE_DOT,        // Dot
+   IDC3_LS_DASHDOT    = STYLE_DASHDOT,    // Dash-Dot
+   IDC3_LS_DASHDOTDOT = STYLE_DASHDOTDOT  // Dash-Dot-Dot
+  };
 
 //==================== INPUTS ====================
 input string InpSecSym                 = "=== Symbol / Broker ==="; // 
@@ -41,12 +50,19 @@ input double InpDailyLossPercent       = 5.0;                       // Daily los
 input bool   InpStopOnDailyLoss        = true;                      // Block new entries on daily loss
 input bool   InpCloseOnDailyLoss       = false;                     // Close position on daily loss
 
+input string InpSecLines               = "=== Setup Lines (#1 / #2) ==="; // 
+input bool   InpDrawSetupLines         = true;                      // Draw setup H/L lines
+input color  InpLine1Color             = clrDodgerBlue;             // #1 (mother) line color
+input ENUM_IDC3_LINE_STYLE InpLine1Style = IDC3_LS_DASH;           // #1 line style
+input color  InpLine2Color             = clrRed;                    // #2 (inside) line color
+input ENUM_IDC3_LINE_STYLE InpLine2Style = IDC3_LS_DASH;           // #2 line style
+input int    InpLineWidth              = 1;                         // Line width (1-5)
+
 input string InpSecSys                 = "=== System ===";          // 
 input int    InpMagic                  = 300301;                    // Magic number
 input int    InpSlippagePts            = 30;                        // OrderSend slippage (points)
 input string InpTradeComment           = "IDC_3";                   // Order comment
 input bool   InpShowPanel              = true;                      // Show Comment panel
-input bool   InpDrawSetupLines         = true;                      // Draw #1 blue / #2 red H-L lines
 input bool   InpDebugLog               = false;                     // Experts tab debug log
 
 //==================== RUNTIME ====================
@@ -98,6 +114,11 @@ int OnInit()
       Alert("IDC_3: TrailingStart/TrailingStep must be >= 1");
       return INIT_FAILED;
    }
+   if(InpLineWidth < 1 || InpLineWidth > 5)
+   {
+      Alert("IDC_3: InpLineWidth must be 1..5");
+      return INIT_FAILED;
+   }
    if(InpFixedLot <= 0.0 || InpMaxLot <= 0.0)
    {
       Alert("IDC_3: lot inputs must be > 0");
@@ -126,7 +147,7 @@ int OnInit()
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.01 init | ", g_symbol,
+   Print("IDC_3 v1.02 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -782,7 +803,9 @@ bool CloseOurPosition()
 }
 
 //+------------------------------------------------------------------+
-//| Chart: #1 = blue H/L, #2 = red H/L                                 |
+//| Chart lines: #1/#2 custom color+style                               |
+//| 시간 범위 = 캔들#1 시각 ~ 캔들#3 시각 (RAY_LEFT=false)               |
+//| → #1보다 1캔들 이전(왼쪽)에는 선이 그려지지 않음                       |
 //+------------------------------------------------------------------+
 void DeleteSetupObjects()
 {
@@ -795,14 +818,24 @@ void DeleteSetupObjects()
    }
 }
 
-void DrawHLine(const string name, const double price, const color clr, const int style)
+void DrawLevelSegment(const string name, const datetime t_from, const datetime t_to,
+                      const double price, const color clr, const int style, const int width)
 {
+   // OBJ_TREND segment — no left ray ⇒ invisible before t_from (#1)
    if(ObjectFind(name) < 0)
-      ObjectCreate(name, OBJ_HLINE, 0, 0, price);
-   ObjectSet(name, OBJPROP_PRICE1, price);
+      ObjectCreate(name, OBJ_TREND, 0, t_from, price, t_to, price);
+   else
+     {
+      ObjectSet(name, OBJPROP_TIME1, t_from);
+      ObjectSet(name, OBJPROP_PRICE1, price);
+      ObjectSet(name, OBJPROP_TIME2, t_to);
+      ObjectSet(name, OBJPROP_PRICE2, price);
+     }
    ObjectSet(name, OBJPROP_COLOR, clr);
    ObjectSet(name, OBJPROP_STYLE, style);
-   ObjectSet(name, OBJPROP_WIDTH, 1);
+   ObjectSet(name, OBJPROP_WIDTH, width);
+   ObjectSet(name, OBJPROP_RAY_RIGHT, false);
+   ObjectSet(name, OBJPROP_RAY_LEFT, false);
    ObjectSet(name, OBJPROP_BACK, true);
    ObjectSet(name, OBJPROP_SELECTABLE, false);
 }
@@ -811,25 +844,37 @@ void DrawSetupHL(const double h1, const double l1,
                  const double h2, const double l2,
                  const datetime t_mother, const datetime t_inside, const datetime t_trigger)
 {
-   // #1 mother → BLUE
-   DrawHLine(OBJ_PFX + "H1", h1, clrDodgerBlue, STYLE_DASH);
-   DrawHLine(OBJ_PFX + "L1", l1, clrDodgerBlue, STYLE_DASH);
-   // #2 inside → RED
-   DrawHLine(OBJ_PFX + "H2", h2, clrRed, STYLE_DASH);
-   DrawHLine(OBJ_PFX + "L2", l2, clrRed, STYLE_DASH);
+   // 표시 시작 = 캔들#1 시각. 그 이전(1캔들 전 포함 왼쪽)에는 미표시.
+   datetime t_from = t_mother;
+   datetime t_to   = t_trigger;
+   if(t_to < t_from)
+      t_to = t_from;
 
-   // labels (optional markers at bar times)
+   int w = InpLineWidth;
+   if(w < 1) w = 1;
+   if(w > 5) w = 5;
+
+   int st1 = (int)InpLine1Style;
+   int st2 = (int)InpLine2Style;
+
+   // #1 mother — user color/style
+   DrawLevelSegment(OBJ_PFX + "H1", t_from, t_to, h1, InpLine1Color, st1, w);
+   DrawLevelSegment(OBJ_PFX + "L1", t_from, t_to, l1, InpLine1Color, st1, w);
+   // #2 inside — user color/style
+   DrawLevelSegment(OBJ_PFX + "H2", t_from, t_to, h2, InpLine2Color, st2, w);
+   DrawLevelSegment(OBJ_PFX + "L2", t_from, t_to, l2, InpLine2Color, st2, w);
+
    string n1 = OBJ_PFX + "LBL1";
    if(ObjectFind(n1) < 0)
       ObjectCreate(n1, OBJ_TEXT, 0, t_mother, h1);
-   ObjectSetText(n1, "1", 8, "Arial", clrDodgerBlue);
+   ObjectSetText(n1, "1", 8, "Arial", InpLine1Color);
    ObjectSet(n1, OBJPROP_TIME1, t_mother);
    ObjectSet(n1, OBJPROP_PRICE1, h1);
 
    string n2 = OBJ_PFX + "LBL2";
    if(ObjectFind(n2) < 0)
       ObjectCreate(n2, OBJ_TEXT, 0, t_inside, h2);
-   ObjectSetText(n2, "2", 8, "Arial", clrRed);
+   ObjectSetText(n2, "2", 8, "Arial", InpLine2Color);
    ObjectSet(n2, OBJPROP_TIME1, t_inside);
    ObjectSet(n2, OBJPROP_PRICE1, h2);
 
@@ -851,7 +896,7 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.01 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.02 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
@@ -864,7 +909,7 @@ void DrawPanel()
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
    s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N") + "\n";
    s += "LastSignal: " + g_last_signal + " | " + g_last_block + "\n";
-   s += "Lines: #1 BLUE / #2 RED | #3 body>wicks | color ignored\n";
+   s += "Lines: #1/#2 custom | span #1..#3 only | #3 body>wicks\n";
    Comment(s);
 }
 

@@ -1,4 +1,4 @@
-; IDC_3 XAUUSD M1 preset (points)
+; IDC_3 XAUUSD M1 preset (points) v1.02
 InpAutoDetectGold=true
 InpManualSymbol=
 InpStopLossPoints=500
@@ -21,9 +21,14 @@ InpCloseOutsideHrs=false
 InpDailyLossPercent=5.0
 InpStopOnDailyLoss=true
 InpCloseOnDailyLoss=false
+InpDrawSetupLines=true
+InpLine1Color=16748574
+InpLine1Style=1
+InpLine2Color=255
+InpLine2Style=1
+InpLineWidth=1
 InpMagic=300301
 InpSlippagePts=30
 InpTradeComment=IDC_3
 InpShowPanel=true
-InpDrawSetupLines=true
 InpDebugLog=false
