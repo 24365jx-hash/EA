@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.02
+## Spec lock v1.03
 
 | 항목 | 내용 |
 |------|------|
@@ -8,7 +8,7 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` **v1.02** |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.03** |
 
 ---
 
@@ -42,18 +42,19 @@
 ### R02 — 전제
 - R01 충족 시에만 이후 진행
 
-### R03 — 진입 트리거 (종가 돌파)
-- 캔들 #2의 **빨간** High/Low를 **종가**로 돌파한 방향 진입
+### R03 — 진입 트리거 (종가 돌파만)
+- 캔들 #2의 High/Low를 **종가(Close)** 로 돌파한 방향만 진입
 - Close > #2 High → **BUY**
 - Close < #2 Low  → **SELL**
-- 꼬리만 돌파하고 종가가 범위 안이면 **무효**
+- **심지(High/Low)만 돌파하고 종가 미돌파 = 무효** (wick-only CANCEL)
+- High/Low는 진입 근거로 사용 금지
 
-### R03c — 돌파 마감 캔들 #3 몸통 조건 (**v1.01 추가**)
-- 돌파봉(#3) **몸통 > 위 심지** AND **몸통 > 아래 심지** (무조건)
+### R03c — 돌파 마감 캔들 #3 몸통 조건
 - `body = |Close−Open|`
 - `upper = High − max(Open,Close)`
 - `lower = min(Open,Close) − Low`
-- 미충족 시 **셋업 취소** (진입 없음)
+- **통과: body > upper AND body > lower AND body > (upper+lower)** (등호 불허)
+- 미충족 시 **셋업 취소**
 
 ### R04 — 타임아웃
 - #2 **직후 1봉(#3)** 만 유효

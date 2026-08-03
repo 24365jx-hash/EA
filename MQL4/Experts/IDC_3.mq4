@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.02  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.03  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.02"
+#property version   "1.03"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -82,6 +82,8 @@ string   g_last_block;         // human reason
 #define OBJ_PFX "IDC3_"
 
 bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c);
+bool IsCloseBreakBuy (const double c3, const double h2);
+bool IsCloseBreakSell(const double c3, const double l2);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -147,7 +149,7 @@ int OnInit()
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.02 init | ", g_symbol,
+   Print("IDC_3 v1.03 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -271,8 +273,17 @@ void EvaluateInsideBarSetup()
    double h3 = iHigh (g_symbol, PERIOD_M1, 1);
    double l3 = iLow  (g_symbol, PERIOD_M1, 1);
 
+   // Sanity: invalid OHLC → no trade
+   if(h1 <= 0.0 || l1 <= 0.0 || h2 <= 0.0 || l2 <= 0.0 ||
+      h3 <= 0.0 || l3 <= 0.0 || o3 <= 0.0 || c3 <= 0.0 ||
+      h1 < l1 || h2 < l2 || h3 < l3)
+   {
+      g_last_signal = "NONE";
+      g_last_block = "invalid OHLC";
+      return;
+   }
+
    // R01: #2 completely inside #1 AND smaller. Candle colors IGNORED.
-   // Strict containment => automatically smaller range.
    bool is_inside = (h2 < h1 && l2 > l1);
    if(!is_inside)
    {
@@ -283,26 +294,36 @@ void EvaluateInsideBarSetup()
       return;
    }
 
-   // Visual: #1 blue H/L, #2 red H/L
+   // Visual: #1 / #2 levels (span #1..#3 only)
    if(InpDrawSetupLines)
       DrawSetupHL(h1, l1, h2, l2, iTime(g_symbol, PERIOD_M1, 3), iTime(g_symbol, PERIOD_M1, 2), t1);
 
-   // R03/R04: entry ONLY if #3 closes outside #2 range; else CANCEL
-   bool buy_break  = (c3 > h2);
-   bool sell_break = (c3 < l2);
+   // R03/R04: 종가 돌파만 인정. 심지(고저)만 돌파하고 종가 미돌파 = 무효.
+   // 절대 High/Low로 진입 방향 결정하지 않음.
+   bool wick_only_buy  = (h3 > h2 && c3 <= h2);
+   bool wick_only_sell = (l3 < l2 && c3 >= l2);
+   bool buy_break      = IsCloseBreakBuy (c3, h2);
+   bool sell_break     = IsCloseBreakSell(c3, l2);
+
+   if(wick_only_buy || wick_only_sell)
+   {
+      g_last_signal = "CANCEL";
+      g_last_block = wick_only_buy ? "wick-only BUY (no close break)" : "wick-only SELL (no close break)";
+      Print("IDC_3: CANCEL wick-only. C3=", DoubleToStr(c3, g_digits),
+            " H3=", DoubleToStr(h3, g_digits), " L3=", DoubleToStr(l3, g_digits),
+            " H2=", DoubleToStr(h2, g_digits), " L2=", DoubleToStr(l2, g_digits));
+      return;
+   }
 
    if(!buy_break && !sell_break)
    {
       g_last_signal = "CANCEL";
-      g_last_block = "bar3 no close break (#2 range)";
-      if(InpDebugLog)
-         Print("IDC_3: CANCEL setup. inside OK but Close1=", c3,
-               " inside H2=", h2, " L2=", l2,
-               " (wicks H3=", h3, " L3=", l3, ")");
+      g_last_block = "bar3 no CLOSE break of #2";
+      Print("IDC_3: CANCEL no close break. C3=", DoubleToStr(c3, g_digits),
+            " H2=", DoubleToStr(h2, g_digits), " L2=", DoubleToStr(l2, g_digits));
       return;
    }
 
-   // Dual break impossible with single close; guard anyway
    if(buy_break && sell_break)
    {
       g_last_signal = "CANCEL";
@@ -310,17 +331,22 @@ void EvaluateInsideBarSetup()
       return;
    }
 
-   // R03c: 돌파 마감 캔들 #3 — 몸통이 위·아래 심지보다 무조건 커야 함
+   // R03c: 돌파 마감봉 #3 — 몸통이 위·아래 심지(합)보다 무조건 커야 함
+   // body > upper + lower  (등호 불허). 각 심지보다도 커야 함.
    if(!IsBodyLargerThanWicks(o3, h3, l3, c3))
    {
       double body = MathAbs(c3 - o3);
       double up_w = h3 - MathMax(o3, c3);
       double dn_w = MathMin(o3, c3) - l3;
+      if(up_w < 0.0) up_w = 0.0;
+      if(dn_w < 0.0) dn_w = 0.0;
       g_last_signal = "CANCEL";
-      g_last_block = "bar3 body<=wick";
-      if(InpDebugLog)
-         Print("IDC_3: CANCEL #3 body filter. body=", body,
-               " upW=", up_w, " dnW=", dn_w);
+      g_last_block = "bar3 body<=wicks";
+      Print("IDC_3: CANCEL #3 body filter. body=", DoubleToStr(body, g_digits),
+            " upW=", DoubleToStr(up_w, g_digits),
+            " dnW=", DoubleToStr(dn_w, g_digits),
+            " sumW=", DoubleToStr(up_w + dn_w, g_digits),
+            " O=", DoubleToStr(o3, g_digits), " C=", DoubleToStr(c3, g_digits));
       return;
    }
 
@@ -328,15 +354,36 @@ void EvaluateInsideBarSetup()
    g_last_signal = buy_break ? "BUY" : "SELL";
    g_last_block = "entry";
 
-   if(InpDebugLog)
-      Print("IDC_3: SIGNAL ", g_last_signal,
-            " H1=", h1, " L1=", l1, " H2=", h2, " L2=", l2, " C3=", c3);
+   Print("IDC_3: SIGNAL ", g_last_signal,
+         " | #2 H/L=", DoubleToStr(h2, g_digits), "/", DoubleToStr(l2, g_digits),
+         " | #3 O=", DoubleToStr(o3, g_digits),
+         " H=", DoubleToStr(h3, g_digits),
+         " L=", DoubleToStr(l3, g_digits),
+         " C=", DoubleToStr(c3, g_digits),
+         " | CLOSE break OK + body>wicks OK");
 
-   OpenMarket(dir, h2, l2);
+   // 진입 직전 재검증 (OpenMarket 내부에서도 재확인)
+   if(!OpenMarket(dir, h2, l2, o3, h3, l3, c3))
+      return;
 }
 
 //+------------------------------------------------------------------+
-//| #3 돌파봉: body > upper_wick AND body > lower_wick (strict)         |
+//| 종가 돌파만 — High/Low(심지) 돌파는 진입 근거가 아님                 |
+//+------------------------------------------------------------------+
+bool IsCloseBreakBuy(const double c3, const double h2)
+{
+   // 종가가 #2 High를 반드시 위로 돌파. High(심지)는 진입조건 아님.
+   return (c3 > h2);
+}
+
+bool IsCloseBreakSell(const double c3, const double l2)
+{
+   return (c3 < l2);
+}
+
+//+------------------------------------------------------------------+
+//| #3 돌파봉: body > (upper+lower) AND body > upper AND body > lower  |
+//| "몸통이 위아래 심지보다 무조건 커야" = 심지 합보다 커야 함(엄격)      |
 //+------------------------------------------------------------------+
 bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c)
 {
@@ -345,14 +392,53 @@ bool IsBodyLargerThanWicks(const double o, const double h, const double l, const
    double lower = MathMin(o, c) - l;
    if(upper < 0.0) upper = 0.0;
    if(lower < 0.0) lower = 0.0;
-   return (body > upper && body > lower);
+   // 합보다 큼 + 각 심지보다 큼 (등호 불허)
+   if(body <= upper)
+      return false;
+   if(body <= lower)
+      return false;
+   if(body <= (upper + lower))
+      return false;
+   return true;
 }
 
 //+------------------------------------------------------------------+
-bool OpenMarket(const int dir, const double h2, const double l2)
+bool OpenMarket(const int dir, const double h2, const double l2,
+                const double o3, const double h3, const double l3, const double c3)
 {
    if(CountOurPositions() > 0)
       return false;
+
+   // 진입 직전 최종 락: 종가 돌파 + 몸통>심지 재확인 (우회 금지)
+   if(dir == OP_BUY)
+   {
+      if(!IsCloseBreakBuy(c3, h2))
+      {
+         g_last_block = "OpenMarket reject: no CLOSE buy break";
+         Print("IDC_3: OpenMarket BLOCKED buy — C3=", DoubleToStr(c3, g_digits),
+               " H2=", DoubleToStr(h2, g_digits));
+         return false;
+      }
+   }
+   else if(dir == OP_SELL)
+   {
+      if(!IsCloseBreakSell(c3, l2))
+      {
+         g_last_block = "OpenMarket reject: no CLOSE sell break";
+         Print("IDC_3: OpenMarket BLOCKED sell — C3=", DoubleToStr(c3, g_digits),
+               " L2=", DoubleToStr(l2, g_digits));
+         return false;
+      }
+   }
+   else
+      return false;
+
+   if(!IsBodyLargerThanWicks(o3, h3, l3, c3))
+   {
+      g_last_block = "OpenMarket reject: body filter";
+      Print("IDC_3: OpenMarket BLOCKED body filter");
+      return false;
+   }
 
    int sl_pts = EffectiveSLPts();
    double lots = CalcLot(sl_pts);
@@ -414,7 +500,9 @@ bool OpenMarket(const int dir, const double h2, const double l2)
    g_trail_armed = false;
    Print("IDC_3: OPEN ", (dir == OP_BUY ? "BUY" : "SELL"),
          " #", ticket, " @", entry, " SL=", sl, " TP=0 lot=", lots,
-         " | break H2=", h2, " L2=", l2);
+         " | C3=", DoubleToStr(c3, g_digits),
+         " break H2=", DoubleToStr(h2, g_digits),
+         " L2=", DoubleToStr(l2, g_digits));
    return true;
 }
 
@@ -896,7 +984,7 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.02 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.03 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
