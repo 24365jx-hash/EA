@@ -63,15 +63,15 @@
 
 | 조건 | 원본 | 코드 | 줄(대략) | 판정 |
 |------|------|------|----------|------|
-| BUY 종가 돌파 | `C3 > H2` | `IsCloseBreakBuy` | ~400–404 | **OK** |
-| SELL 종가 돌파 | `C3 < L2` | `IsCloseBreakSell` | ~406–409 | **OK** |
-| 심지만 BUY | `H3>H2 && C3<=H2` → CANCEL | `wick_only_buy` | ~335–346 | **OK** |
+| BUY 종가 돌파 | `C3 > H2` | `IsCloseBreakBuy` | L403–406 | **OK** |
+| SELL 종가 돌파 | `C3 < L2` | `IsCloseBreakSell` | L409–411 | **OK** |
+| 심지만 BUY | `H3>H2 && C3<=H2` → CANCEL | `wick_only_buy` | L338–349 | **OK** |
 | 심지만 SELL | `L3<L2 && C3>=L2` → CANCEL | `wick_only_sell` | 동상 | **OK** |
-| 미돌파 | 종가 미돌파 → 셋업 취소 | `CANCEL no CLOSE break` | ~348–354 | **OK** |
-| 몸통 > 위심지 | `body > upper` | `body <= upper` → fail | ~422–423 | **OK** |
-| 몸통 > 아래심지 | `body > lower` | `body <= lower` → fail | ~424–425 | **OK** |
+| 미돌파 | 종가 미돌파 → 셋업 취소 | `CANCEL no CLOSE break` | L351–357 | **OK** |
+| 몸통 > 위심지 | `body > upper` | `body <= upper` → fail | L425–426 | **OK** |
+| 몸통 > 아래심지 | `body > lower` | `body <= lower` → fail | L427–428 | **OK** |
 | 몸통 > 심지**합** | **금지** | `upper+lower` 검색 **0건** | — | **OK (미포함)** |
-| OrderSend 직전 재검증 | 우회 금지 | Close + body 재확인 | ~436–465 | **OK** |
+| OrderSend 직전 재검증 | 우회 금지 | Close + body 재확인 | L439–468 | **OK** |
 | High/Low로 방향결정 | 금지 | Close만 | — | **OK** |
 | 캔들 색 | 무관 | O/C 색분기 **없음** | — | **OK** |
 
@@ -89,7 +89,7 @@
 |----|------|-----------|------|
 | TF | M1 only | `OnInit` Period!=M1 → INIT_FAILED | **OK** |
 | SYM | Gold | `ResolveSymbol` / `IsGoldSymbol` | **OK** |
-| R01 | `H2 < H1 && L2 > L1` 엄격(터치 불가) | `is_inside` ~320 | **OK** |
+| R01 | `H2 < H1 && L2 > L1` 엄격(터치 불가) | `is_inside` L323 | **OK** |
 | R01색 | #1/#2 색 무관 | 색 if 없음; O1/C1/O2/C2 진입식 미사용 | **OK** |
 | R02 | R01 실패 시 중단 | `no inside bar` return | **OK** |
 | R03 | #2 종가 돌파만 | `IsCloseBreak*` | **OK** |

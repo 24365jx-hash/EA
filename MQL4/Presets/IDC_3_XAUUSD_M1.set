@@ -1,4 +1,4 @@
-; IDC_3 XAUUSD M1 preset (points) v1.02
+; IDC_3 XAUUSD M1 preset (points) v1.07
 InpAutoDetectGold=true
 InpManualSymbol=
 InpStopLossPoints=500
