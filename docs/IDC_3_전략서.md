@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.05
+## Spec lock v1.06
 
 | 항목 | 내용 |
 |------|------|
@@ -8,7 +8,7 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` **v1.04** |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.06** |
 
 ---
 
@@ -34,27 +34,22 @@
 ## 2. 진입 규칙
 
 ### R01 — 인사이드 바
-- 캔들 #2 High < 캔들 #1 High
-- 캔들 #2 Low  > 캔들 #1 Low
-- #2가 #1보다 작음 (엄격 포함으로 자동 충족)
-- 캔들 색 무시
+- `H2 < H1 AND L2 > L1` (**완전 포함, 등호·터치 불가**)
+- #2가 #1보다 작음 (위 식으로 자동)
+- **캔들 색 완전 무관**
 
 ### R02 — 전제
 - R01 충족 시에만 이후 진행
 
 ### R03 — 진입 트리거 (종가 돌파만)
-- 캔들 #2의 High/Low를 **종가(Close)** 로 돌파한 방향만 진입
-- Close > #2 High → **BUY**
-- Close < #2 Low  → **SELL**
-- **심지(High/Low)만 돌파하고 종가 미돌파 = 무효** (wick-only CANCEL)
-- High/Low는 진입 근거로 사용 금지
+- Close > #2 High → **BUY** / Close < #2 Low → **SELL**
+- 심지만 돌파·종가 미돌파 = 무효
+- 돌파 방향도 **색 무관**
 
-### R03c — 돌파 마감 캔들 #3 몸통 조건
-- `body = |Close−Open|`
-- `upper = High − max(Open,Close)`
-- `lower = min(Open,Close) − Low`
-- **통과: body > upper AND body > lower AND body > (upper+lower)** (등호 불허)
-- 미충족 시 **셋업 취소**
+### R03c — 돌파봉 #3 몸통
+- `body = |Close−Open|` (색 무관)
+- **통과: body > upper AND body > lower** 만
+- **심지 합 비교 금지** (v1.04 과필터 버그)
 
 ### R04 — 타임아웃
 - #2 **직후 1봉(#3)** 만 유효

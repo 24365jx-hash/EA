@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.05  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.06  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.05"
+#property version   "1.06"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -78,12 +78,14 @@ datetime g_last_eval_bar1;     // shift-1 bar time already evaluated
 bool     g_trail_armed;
 string   g_last_signal;        // NONE / BUY / SELL / CANCEL
 string   g_last_block;         // human reason
+string   g_last_setup_dump;    // last evaluated OHLC dump for panel
 
 #define OBJ_PFX "IDC3_"
 
 bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c);
 bool IsCloseBreakBuy (const double c3, const double h2);
 bool IsCloseBreakSell(const double c3, const double l2);
+void ReadBarOHLC(const int shift, double &o, double &h, double &l, double &c, datetime &t);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -144,12 +146,13 @@ int OnInit()
    g_trail_armed = false;
    g_last_signal = "NONE";
    g_last_block = "init";
+   g_last_setup_dump = "";
 
    // restart: if already in position, mark trail state fresh
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.05 init | COLOR IGNORED | ", g_symbol,
+   Print("IDC_3 v1.06 init | COLOR IGNORED | strict inside | body>each wick | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -167,7 +170,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(!IsConnected() || !IsTradeAllowed())
+   if(!IsConnected())
       return;
    if(Period() != PERIOD_M1)
       return;
@@ -179,15 +182,18 @@ void OnTick()
    //--- IN POSITION: manage only, no new entries (R05)
    if(CountOurPositions() > 0)
    {
-      if(InpUseSLGuardian)
-         GuardOpenPositionSL();
-      ManageTrailing();
+      if(IsTradeAllowed())
+        {
+         if(InpUseSLGuardian)
+            GuardOpenPositionSL();
+         ManageTrailing();
 
-      if(g_daily_loss_hit && InpCloseOnDailyLoss)
-         CloseOurPosition();
+         if(g_daily_loss_hit && InpCloseOnDailyLoss)
+            CloseOurPosition();
 
-      if(!IsWithinTradingHours() && InpCloseOutsideHrs)
-         CloseOurPosition();
+         if(!IsWithinTradingHours() && InpCloseOutsideHrs)
+            CloseOurPosition();
+        }
 
       DrawPanel();
       return;
@@ -195,8 +201,13 @@ void OnTick()
 
    g_trail_armed = false;
 
-   //--- FLAT: new-bar evaluation only
-   datetime bar0 = iTime(g_symbol, PERIOD_M1, 0);
+   //--- FLAT: new-bar evaluation (IsTradeAllowed은 OrderSend 때만 검사 — 봉 평가 스킵 금지)
+   datetime bar0 = 0;
+   if(StringCompare(g_symbol, Symbol()) == 0)
+      bar0 = Time[0];
+   else
+      bar0 = iTime(g_symbol, PERIOD_M1, 0);
+
    if(bar0 <= 0)
    {
       DrawPanel();
@@ -209,17 +220,43 @@ void OnTick()
    }
    g_last_m1_bar = bar0;
 
-   // evaluate just-closed bars: #3=shift1, #2=shift2, #1=shift3
    EvaluateInsideBarSetup();
    DrawPanel();
 }
 
 //+------------------------------------------------------------------+
-//| Core strategy — docs/IDC_3_전략서.md §2                            |
+//| Chart와 동일 OHLC 강제 (현재차트 심볼·M1일 때 Time/O/H/L/C 배열)    |
+//+------------------------------------------------------------------+
+void ReadBarOHLC(const int shift, double &o, double &h, double &l, double &c, datetime &t)
+{
+   if(StringCompare(g_symbol, Symbol()) == 0 && Period() == PERIOD_M1)
+     {
+      o = Open[shift];
+      h = High[shift];
+      l = Low[shift];
+      c = Close[shift];
+      t = Time[shift];
+     }
+   else
+     {
+      o = iOpen (g_symbol, PERIOD_M1, shift);
+      h = iHigh (g_symbol, PERIOD_M1, shift);
+      l = iLow  (g_symbol, PERIOD_M1, shift);
+      c = iClose(g_symbol, PERIOD_M1, shift);
+      t = iTime (g_symbol, PERIOD_M1, shift);
+     }
+}
+
 //+------------------------------------------------------------------+
 void EvaluateInsideBarSetup()
 {
-   datetime t1 = iTime(g_symbol, PERIOD_M1, 1);
+   datetime t1 = 0;
+   double o1, h1, l1, c1, o2, h2, l2, c2, o3, h3, l3, c3;
+   datetime t2, t3;
+   ReadBarOHLC(1, o3, h3, l3, c3, t1);
+   ReadBarOHLC(2, o2, h2, l2, c2, t2);
+   ReadBarOHLC(3, o1, h1, l1, c1, t3);
+
    if(t1 <= 0)
    {
       g_last_block = "no bar1";
@@ -231,6 +268,13 @@ void EvaluateInsideBarSetup()
       return;
    }
    g_last_eval_bar1 = t1;
+
+   g_last_setup_dump = StringFormat(
+      "#1 H%s L%s | #2 H%s L%s | #3 O%s H%s L%s C%s",
+      DoubleToStr(h1, g_digits), DoubleToStr(l1, g_digits),
+      DoubleToStr(h2, g_digits), DoubleToStr(l2, g_digits),
+      DoubleToStr(o3, g_digits), DoubleToStr(h3, g_digits),
+      DoubleToStr(l3, g_digits), DoubleToStr(c3, g_digits));
 
    if(!IsWithinTradingHours())
    {
@@ -254,26 +298,16 @@ void EvaluateInsideBarSetup()
    {
       g_last_signal = "NONE";
       g_last_block = "spread wide";
+      Print("IDC_3: spread wide ", SpreadPoints(), " > ", InpMaxSpreadPts);
       return;
    }
 
-   // Need mother(#1)=shift3, inside(#2)=shift2, trigger(#3)=shift1
-   if(iBars(g_symbol, PERIOD_M1) < 4)
+   if(Bars < 4 && iBars(g_symbol, PERIOD_M1) < 4)
    {
       g_last_block = "not enough bars";
       return;
    }
 
-   double h1 = iHigh(g_symbol, PERIOD_M1, 3);
-   double l1 = iLow (g_symbol, PERIOD_M1, 3);
-   double h2 = iHigh(g_symbol, PERIOD_M1, 2);
-   double l2 = iLow (g_symbol, PERIOD_M1, 2);
-   double o3 = iOpen (g_symbol, PERIOD_M1, 1);
-   double c3 = iClose(g_symbol, PERIOD_M1, 1);
-   double h3 = iHigh (g_symbol, PERIOD_M1, 1);
-   double l3 = iLow  (g_symbol, PERIOD_M1, 1);
-
-   // Sanity: invalid OHLC → no trade
    if(h1 <= 0.0 || l1 <= 0.0 || h2 <= 0.0 || l2 <= 0.0 ||
       h3 <= 0.0 || l3 <= 0.0 || o3 <= 0.0 || c3 <= 0.0 ||
       h1 < l1 || h2 < l2 || h3 < l3)
@@ -283,64 +317,51 @@ void EvaluateInsideBarSetup()
       return;
    }
 
-   // R01: #2 inside #1. 캔들 색(#1/#2/#3) 완전 무관 — O/C 색판정 없음.
-   // 포함: 고저 터치(등호) 허용. 단 #2 범위는 #1보다 반드시 작음.
-   double range1 = h1 - l1;
-   double range2 = h2 - l2;
-   bool is_inside = (h2 <= h1 && l2 >= l1 && range2 < range1 && range2 > 0.0);
+   // R01 원본: #2가 #1에 완전 포함 + 더 작음. 등호(터치) 불가. 색 무관.
+   bool is_inside = (h2 < h1 && l2 > l1);
    if(!is_inside)
    {
       g_last_signal = "NONE";
       g_last_block = "no inside bar";
       if(InpDrawSetupLines)
          DeleteSetupObjects();
-      Print("IDC_3: no inside. H1=", DoubleToStr(h1, g_digits),
-            " L1=", DoubleToStr(l1, g_digits),
-            " H2=", DoubleToStr(h2, g_digits),
-            " L2=", DoubleToStr(l2, g_digits),
-            " r1=", DoubleToStr(range1, g_digits),
-            " r2=", DoubleToStr(range2, g_digits));
+      Print("IDC_3: no inside (strict). ", g_last_setup_dump);
       return;
    }
 
-   // Visual: #1 / #2 levels (span #1..#3 only)
    if(InpDrawSetupLines)
-      DrawSetupHL(h1, l1, h2, l2, iTime(g_symbol, PERIOD_M1, 3), iTime(g_symbol, PERIOD_M1, 2), t1);
+      DrawSetupHL(h1, l1, h2, l2, t3, t2, t1);
 
-   // R03/R04: 종가 돌파만. 색 무관. 심지 돌파만으로는 진입 금지.
+   // R03: 종가 돌파만 (#2 기준). 색 무관.
    bool wick_only_buy  = (h3 > h2 && c3 <= h2);
    bool wick_only_sell = (l3 < l2 && c3 >= l2);
-   bool buy_break      = IsCloseBreakBuy (c3, h2);
+   bool buy_break      = IsCloseBreakBuy(c3, h2);
    bool sell_break     = IsCloseBreakSell(c3, l2);
 
    if(wick_only_buy || wick_only_sell)
    {
       g_last_signal = "CANCEL";
-      g_last_block = wick_only_buy ? "wick-only BUY (no close break)" : "wick-only SELL (no close break)";
-      Print("IDC_3: CANCEL wick-only. C3=", DoubleToStr(c3, g_digits),
-            " H3=", DoubleToStr(h3, g_digits), " L3=", DoubleToStr(l3, g_digits),
-            " H2=", DoubleToStr(h2, g_digits), " L2=", DoubleToStr(l2, g_digits));
+      g_last_block = wick_only_buy ? "wick-only BUY" : "wick-only SELL";
+      Print("IDC_3: CANCEL wick-only. ", g_last_setup_dump);
       return;
    }
 
    if(!buy_break && !sell_break)
    {
       g_last_signal = "CANCEL";
-      g_last_block = "bar3 no CLOSE break of #2";
-      Print("IDC_3: CANCEL no close break. C3=", DoubleToStr(c3, g_digits),
-            " H2=", DoubleToStr(h2, g_digits), " L2=", DoubleToStr(l2, g_digits));
+      g_last_block = "no CLOSE break #2";
+      Print("IDC_3: CANCEL no close break. ", g_last_setup_dump);
       return;
    }
 
    if(buy_break && sell_break)
    {
       g_last_signal = "CANCEL";
-      g_last_block = "dual break impossible";
+      g_last_block = "dual break";
       return;
    }
 
-   // R03c: 돌파봉 #3 몸통 > 위심지 AND 몸통 > 아래심지 (색 무관, abs 몸통)
-   // 합(sum) 조건 폐기 — 과필터로 정상 돌파 진입을 막던 버그
+   // R03c 원본 명령: body > 위심지 AND body > 아래심지 (합 비교 없음!)
    if(!IsBodyLargerThanWicks(o3, h3, l3, c3))
    {
       double body = MathAbs(c3 - o3);
@@ -349,11 +370,19 @@ void EvaluateInsideBarSetup()
       if(up_w < 0.0) up_w = 0.0;
       if(dn_w < 0.0) dn_w = 0.0;
       g_last_signal = "CANCEL";
-      g_last_block = "bar3 body<=wick";
-      Print("IDC_3: CANCEL #3 body filter. body=", DoubleToStr(body, g_digits),
-            " upW=", DoubleToStr(up_w, g_digits),
-            " dnW=", DoubleToStr(dn_w, g_digits),
-            " O=", DoubleToStr(o3, g_digits), " C=", DoubleToStr(c3, g_digits));
+      g_last_block = "body<=wick";
+      Print("IDC_3: CANCEL body. body=", DoubleToStr(body, g_digits),
+            " up=", DoubleToStr(up_w, g_digits),
+            " dn=", DoubleToStr(dn_w, g_digits),
+            " | ", g_last_setup_dump);
+      return;
+   }
+
+   if(!IsTradeAllowed())
+   {
+      g_last_signal = buy_break ? "BUY" : "SELL";
+      g_last_block = "signal OK but trade not allowed";
+      Print("IDC_3: SIGNAL blocked IsTradeAllowed=false. ", g_last_setup_dump);
       return;
    }
 
@@ -361,16 +390,9 @@ void EvaluateInsideBarSetup()
    g_last_signal = buy_break ? "BUY" : "SELL";
    g_last_block = "entry";
 
-   Print("IDC_3: SIGNAL ", g_last_signal,
-         " | #2 H/L=", DoubleToStr(h2, g_digits), "/", DoubleToStr(l2, g_digits),
-         " | #3 O=", DoubleToStr(o3, g_digits),
-         " H=", DoubleToStr(h3, g_digits),
-         " L=", DoubleToStr(l3, g_digits),
-         " C=", DoubleToStr(c3, g_digits),
-         " | CLOSE break OK + body>each wick OK | color ignored");
+   Print("IDC_3: SIGNAL ", g_last_signal, " | ", g_last_setup_dump);
 
-   if(!OpenMarket(dir, h2, l2, o3, h3, l3, c3))
-      return;
+   OpenMarket(dir, h2, l2, o3, h3, l3, c3);
 }
 
 //+------------------------------------------------------------------+
@@ -459,13 +481,13 @@ bool OpenMarket(const int dir, const double h2, const double l2,
    color  clr;
    if(dir == OP_BUY)
    {
-      entry = ask;
+      entry = NormalizeDouble(ask, g_digits);
       sl = NormalizeDouble(entry - PtsPrice(sl_pts), g_digits);
       clr = clrDodgerBlue;
    }
    else
    {
-      entry = bid;
+      entry = NormalizeDouble(bid, g_digits);
       sl = NormalizeDouble(entry + PtsPrice(sl_pts), g_digits);
       clr = clrOrangeRed;
    }
@@ -997,7 +1019,7 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.05 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.06 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
@@ -1010,7 +1032,9 @@ void DrawPanel()
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
    s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N") + "\n";
    s += "LastSignal: " + g_last_signal + " | " + g_last_block + "\n";
-   s += "COLOR IGNORED | inside<=touch+smaller | body>each wick\n";
+   if(StringLen(g_last_setup_dump) > 0)
+      s += g_last_setup_dump + "\n";
+   s += "STRICT inside(no touch) | body>each wick | color IGNORED\n";
    Comment(s);
 }
 
