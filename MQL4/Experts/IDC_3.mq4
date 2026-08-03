@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.0   |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.01  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
