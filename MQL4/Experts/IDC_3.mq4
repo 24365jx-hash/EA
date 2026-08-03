@@ -15,8 +15,8 @@ input string InpManualSymbol           = "";                        // Manual sy
 
 input string InpSecRisk                = "=== SL / Trailing (points) ==="; // 
 input int    InpStopLossPoints         = 500;                       // Initial SL (points, mandatory)
-input int    InpTrailingStartPts       = 200;                       // Trail arm: move SL to BE
-input int    InpTrailingStepPts        = 10;                        // After BE: trail step (points)
+input int    InpTrailingStartPts       = 200;                       // 1차 SL 본전(=Start 수익 잠금) 트리거
+input int    InpTrailingStepPts        = 10;                        // 1차 이후 Floor 계단 스텝 (points)
 
 input string InpSecLot                 = "=== Lot ===";             // 
 input bool   InpUseAutoLot             = false;                     // Auto lot ON/OFF
@@ -367,8 +367,9 @@ bool OpenMarket(const int dir, const double h2, const double l2)
 }
 
 //+------------------------------------------------------------------+
-//| Trailing — 전략서 §3: start 도달 시 SL→본전(BE), 이후 step 추종     |
-//| BUY:  profit>=start → SL=open; then +step per TrailingStep        |
+//| Trailing — IDC 표준 (본전=1차 Start 수익 잠금, BE/진입가 이동 아님)  |
+//| profit>=Start → SL = Open ± Start                                  |
+//| 이후 SL = Open ± (Start + floor((profit-Start)/Step)*Step)         |
 //+------------------------------------------------------------------+
 void ManageTrailing()
 {
@@ -390,10 +391,11 @@ void ManageTrailing()
    if(profit_pts < InpTrailingStartPts)
       return;
 
-   // At exactly start: steps=0 → SL at open (breakeven)
    double extra = profit_pts - InpTrailingStartPts;
    int steps = (int)MathFloor(extra / InpTrailingStepPts + 1e-8);
-   int lock_pts = steps * InpTrailingStepPts; // 0 = BE
+   if(steps < 0) steps = 0;
+   // 1차: Start 수익 잠금 / 이후: Start + steps*Step
+   int lock_pts = InpTrailingStartPts + steps * InpTrailingStepPts;
 
    double desired_sl;
    if(type == OP_BUY)
@@ -825,7 +827,7 @@ void DrawPanel()
    s += "Session: " + (IsWithinTradingHours() ? "OPEN" : "CLOSED");
    s += " | DailyLoss: " + (g_daily_loss_hit ? "HIT" : "ok") + "\n";
    s += "SL: " + IntegerToString(EffectiveSLPts()) + " pts (set " + IntegerToString(InpStopLossPoints) + ")";
-   s += " | Trail: BE@" + IntegerToString(InpTrailingStartPts) + " step " + IntegerToString(InpTrailingStepPts) + "\n";
+   s += " | Trail: lock@" + IntegerToString(InpTrailingStartPts) + " step " + IntegerToString(InpTrailingStepPts) + "\n";
    s += "TP: NONE | Pos: " + IntegerToString(CountOurPositions());
    s += " | Lot: " + (InpUseAutoLot ? "AUTO" : "FIXED") + "\n";
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");

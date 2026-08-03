@@ -53,20 +53,25 @@
 
 ---
 
-## 3. 트레일링 (원본 예시 락)
+## 3. 트레일링 (IDC 표준 — 진입가 BE 이동 아님)
 
 예: Start=200, Step=10
 
-| 수익(points) | SL |
-|--------------|-----|
+| 수익(points) | SL (BUY) |
+|--------------|----------|
 | < 200 | 초기 SL 유지 |
-| ≥ 200 | **진입가(본전/BE)** |
-| ≥ 210 | BE + 10 |
-| ≥ 220 | BE + 20 |
-| … | step마다 추종 |
+| ≥ 200 | **Open + 200** (1차 본전 = Start 수익 잠금) |
+| ≥ 210 | Open + 210 |
+| ≥ 220 | Open + 220 |
+| … | Start + floor((profit−Start)/Step)×Step |
 
-공식 (BUY): `lock_pts = floor((profit - Start) / Step) * Step` → SL = Open + lock_pts  
-(SELL 대칭)
+공식 (BUY):  
+`lock = Start + floor((profit - Start) / Step) * Step`  
+`SL = Open + lock`  
+(SELL 대칭: `Open - lock`)
+
+> “본전” = 진입가(BE)로 SL을 옮기는 것이 **아님**.  
+> IDC_X/A/V/8과 동일: **1차에 Start 포인트 수익을 잠그는 이동**.
 
 ---
 
