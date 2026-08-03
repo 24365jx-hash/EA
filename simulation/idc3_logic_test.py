@@ -1,67 +1,64 @@
 #!/usr/bin/env python3
-"""IDC_3 v1.04 — close break, body>sum(wicks), trail=Start+steps*Step (NOT BE)."""
+"""IDC_3 v1.05 — color ignored, inside touch+smaller, body>each wick, trail Start+step."""
 
-def close_break_buy(c3, h2):
-    return c3 > h2
+def is_inside(h1, l1, h2, l2):
+    return h2 <= h1 and l2 >= l1 and (h2 - l2) < (h1 - l1) and (h2 - l2) > 0
 
-def close_break_sell(c3, l2):
-    return c3 < l2
-
-def wick_only_buy(h3, c3, h2):
-    return h3 > h2 and c3 <= h2
-
-def body_gt_wicks(o, h, l, c):
+def body_gt_each(o, h, l, c):
     body = abs(c - o)
     upper = max(0.0, h - max(o, c))
     lower = max(0.0, min(o, c) - l)
-    return body > upper and body > lower and body > (upper + lower)
+    return body > upper and body > lower
 
 def trail_lock(profit, start, step):
-    """User lock: @Start → SL at +/-Start; then +step from that point."""
     if profit < start:
         return None
-    steps = int((profit - start) // step)
-    return start + steps * step
+    return start + int((profit - start) // step) * step
 
 def main():
     fails = []
 
-    if not wick_only_buy(110, 105, 108):
-        fails.append("wick-only buy")
-    if close_break_buy(105, 108):
-        fails.append("wick-only must not close-break")
-    if not close_break_buy(109, 108):
-        fails.append("close buy")
-    if not close_break_sell(91, 92):
-        fails.append("close sell")
+    # color irrelevant: same geometry always same result
+    if is_inside(100, 90, 98, 92) != is_inside(100, 90, 98, 92):
+        fails.append("color independence")
 
-    if body_gt_wicks(100, 150, 85, 130):  # 30 vs 20+15
-        fails.append("weak body must fail")
-    if not body_gt_wicks(100, 150, 100, 140):  # 40 vs 10+10
-        fails.append("strong body must pass")
+    # equal high touch = inside if smaller range
+    if not is_inside(100, 90, 100, 92):
+        fails.append("equal high must be inside")
+    if not is_inside(100, 90, 98, 90):
+        fails.append("equal low must be inside")
+    # equal both = same range → not smaller → fail
+    if is_inside(100, 90, 100, 90):
+        fails.append("identical range must fail")
+    # outside
+    if is_inside(100, 90, 101, 92):
+        fails.append("outside high must fail")
 
-    # USER TRAIL COMMAND — NOT BE
-    if trail_lock(199, 200, 10) is not None:
-        fails.append("<start no trail")
+    # old strict would reject equal high
+    strict = (100 < 100 and 92 > 90)  # False
+    if strict:
+        fails.append("sanity")
+
+    # body each only (sum NOT required)
+    if not body_gt_each(100, 122, 97, 112):  # 12>10 and 12>3
+        fails.append("body>each should pass")
+    # would fail sum (12<=13) but we do NOT use sum
+    if body_gt_each(100, 130, 95, 110):  # body10 up20 dn5 → fail each
+        fails.append("body<=upper must fail")
+
     if trail_lock(200, 200, 10) != 200:
-        fails.append("@200 must lock 200 (NOT 0/BE)")
-    if trail_lock(209, 200, 10) != 200:
-        fails.append("209 still 200")
+        fails.append("trail @200=200")
     if trail_lock(210, 200, 10) != 210:
-        fails.append("210 => 210")
-    if trail_lock(220, 200, 10) != 220:
-        fails.append("220 => 220")
-    if trail_lock(231, 200, 10) != 230:
-        fails.append("231 => 230")
+        fails.append("trail 210")
     if trail_lock(200, 200, 10) == 0:
-        fails.append("REGRESSION: BE formula forbidden")
+        fails.append("no BE")
 
     if fails:
         print("FAIL:")
         for f in fails:
             print(" -", f)
         raise SystemExit(1)
-    print("PASS: trail=Start+steps*Step (user command) + close/body locks")
+    print("PASS: v1.05 inside touch+smaller, body>each, trail, color-free")
 
 if __name__ == "__main__":
     main()

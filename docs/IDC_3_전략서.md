@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.04
+## Spec lock v1.05
 
 | 항목 | 내용 |
 |------|------|
@@ -8,7 +8,7 @@
 | 상품 | Gold (XAUUSD 계열) |
 | 타임프레임 | **M1 전용** |
 | 플랫폼 | MetaTrader 4 |
-| EA | `MQL4/Experts/IDC_3.mq4` **v1.03** |
+| EA | `MQL4/Experts/IDC_3.mq4` **v1.04** |
 
 ---
 
@@ -70,24 +70,25 @@
 
 ---
 
-## 3. 트레일링 (최초 원본전략)
+## 3. 트레일링 (사용자 명령 락 — BE 금지)
 
 예: Start=200, Step=10
 
 | 수익(points) | SL (BUY) |
 |--------------|----------|
 | < 200 | 초기 SL 유지 |
-| ≥ 200 | **진입가(본전/BE)** |
-| ≥ 210 | 본전 + 10 |
-| ≥ 220 | 본전 + 20 |
-| … | Step마다 추종 |
+| ≥ 200 | **진입점 + 200** (즉시) |
+| ≥ 210 | 진입점 + 210 |
+| ≥ 220 | 진입점 + 220 |
+| … | 최초 200pt 지점부터 Step 간격 추격 |
 
 공식 (BUY):  
-`lock_from_BE = floor((profit − Start) / Step) × Step`  ← Start 시 **0 = 진입가**  
-`SL = Open + lock_from_BE`  
-(SELL 대칭)
+`lock = Start + floor((profit − Start) / Step) × Step`  
+`SL = Open + lock`  
+(SELL: `Open − lock`)
 
-원문: Start 도달 시 SL을 **진입가(본전)** 으로 이동 후, Step 간격으로 가격 추종.
+**금지:** SL을 진입가(본전/0)로 옮기는 해석.  
+명령: “200포인트 되는 즉시 SL은 진입점으로부터 **200포인트 지점**으로 이동”.
 
 ---
 

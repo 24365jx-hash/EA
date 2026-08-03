@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.04  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.05  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.04"
+#property version   "1.05"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -149,7 +149,7 @@ int OnInit()
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.04 init | ", g_symbol,
+   Print("IDC_3 v1.05 init | COLOR IGNORED | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -283,14 +283,23 @@ void EvaluateInsideBarSetup()
       return;
    }
 
-   // R01: #2 completely inside #1 AND smaller. Candle colors IGNORED.
-   bool is_inside = (h2 < h1 && l2 > l1);
+   // R01: #2 inside #1. 캔들 색(#1/#2/#3) 완전 무관 — O/C 색판정 없음.
+   // 포함: 고저 터치(등호) 허용. 단 #2 범위는 #1보다 반드시 작음.
+   double range1 = h1 - l1;
+   double range2 = h2 - l2;
+   bool is_inside = (h2 <= h1 && l2 >= l1 && range2 < range1 && range2 > 0.0);
    if(!is_inside)
    {
       g_last_signal = "NONE";
       g_last_block = "no inside bar";
       if(InpDrawSetupLines)
          DeleteSetupObjects();
+      Print("IDC_3: no inside. H1=", DoubleToStr(h1, g_digits),
+            " L1=", DoubleToStr(l1, g_digits),
+            " H2=", DoubleToStr(h2, g_digits),
+            " L2=", DoubleToStr(l2, g_digits),
+            " r1=", DoubleToStr(range1, g_digits),
+            " r2=", DoubleToStr(range2, g_digits));
       return;
    }
 
@@ -298,8 +307,7 @@ void EvaluateInsideBarSetup()
    if(InpDrawSetupLines)
       DrawSetupHL(h1, l1, h2, l2, iTime(g_symbol, PERIOD_M1, 3), iTime(g_symbol, PERIOD_M1, 2), t1);
 
-   // R03/R04: 종가 돌파만 인정. 심지(고저)만 돌파하고 종가 미돌파 = 무효.
-   // 절대 High/Low로 진입 방향 결정하지 않음.
+   // R03/R04: 종가 돌파만. 색 무관. 심지 돌파만으로는 진입 금지.
    bool wick_only_buy  = (h3 > h2 && c3 <= h2);
    bool wick_only_sell = (l3 < l2 && c3 >= l2);
    bool buy_break      = IsCloseBreakBuy (c3, h2);
@@ -331,8 +339,8 @@ void EvaluateInsideBarSetup()
       return;
    }
 
-   // R03c: 돌파 마감봉 #3 — 몸통이 위·아래 심지(합)보다 무조건 커야 함
-   // body > upper + lower  (등호 불허). 각 심지보다도 커야 함.
+   // R03c: 돌파봉 #3 몸통 > 위심지 AND 몸통 > 아래심지 (색 무관, abs 몸통)
+   // 합(sum) 조건 폐기 — 과필터로 정상 돌파 진입을 막던 버그
    if(!IsBodyLargerThanWicks(o3, h3, l3, c3))
    {
       double body = MathAbs(c3 - o3);
@@ -341,11 +349,10 @@ void EvaluateInsideBarSetup()
       if(up_w < 0.0) up_w = 0.0;
       if(dn_w < 0.0) dn_w = 0.0;
       g_last_signal = "CANCEL";
-      g_last_block = "bar3 body<=wicks";
+      g_last_block = "bar3 body<=wick";
       Print("IDC_3: CANCEL #3 body filter. body=", DoubleToStr(body, g_digits),
             " upW=", DoubleToStr(up_w, g_digits),
             " dnW=", DoubleToStr(dn_w, g_digits),
-            " sumW=", DoubleToStr(up_w + dn_w, g_digits),
             " O=", DoubleToStr(o3, g_digits), " C=", DoubleToStr(c3, g_digits));
       return;
    }
@@ -360,9 +367,8 @@ void EvaluateInsideBarSetup()
          " H=", DoubleToStr(h3, g_digits),
          " L=", DoubleToStr(l3, g_digits),
          " C=", DoubleToStr(c3, g_digits),
-         " | CLOSE break OK + body>wicks OK");
+         " | CLOSE break OK + body>each wick OK | color ignored");
 
-   // 진입 직전 재검증 (OpenMarket 내부에서도 재확인)
    if(!OpenMarket(dir, h2, l2, o3, h3, l3, c3))
       return;
 }
@@ -382,8 +388,8 @@ bool IsCloseBreakSell(const double c3, const double l2)
 }
 
 //+------------------------------------------------------------------+
-//| #3 돌파봉: body > (upper+lower) AND body > upper AND body > lower  |
-//| "몸통이 위아래 심지보다 무조건 커야" = 심지 합보다 커야 함(엄격)      |
+//| #3 돌파봉: body > upper_wick AND body > lower_wick                 |
+//| 색 무관(|C-O|). 심지 합 비교 없음.                                  |
 //+------------------------------------------------------------------+
 bool IsBodyLargerThanWicks(const double o, const double h, const double l, const double c)
 {
@@ -392,12 +398,9 @@ bool IsBodyLargerThanWicks(const double o, const double h, const double l, const
    double lower = MathMin(o, c) - l;
    if(upper < 0.0) upper = 0.0;
    if(lower < 0.0) lower = 0.0;
-   // 합보다 큼 + 각 심지보다 큼 (등호 불허)
    if(body <= upper)
       return false;
    if(body <= lower)
-      return false;
-   if(body <= (upper + lower))
       return false;
    return true;
 }
@@ -994,7 +997,7 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.04 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.05 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
@@ -1007,7 +1010,7 @@ void DrawPanel()
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
    s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N") + "\n";
    s += "LastSignal: " + g_last_signal + " | " + g_last_block + "\n";
-   s += "Trail: @Start SL=Open+/-Start then +Step | #3 close+body\n";
+   s += "COLOR IGNORED | inside<=touch+smaller | body>each wick\n";
    Comment(s);
 }
 
