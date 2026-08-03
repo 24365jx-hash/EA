@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //| IDC_3.mq4                                                         |
-//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.03  |
+//| GOLD M1 Inside Bar System — Spec lock: docs/IDC_3_전략서.md v1.04  |
 //+------------------------------------------------------------------+
 #property copyright "IDC_3"
 #property link      ""
-#property version   "1.03"
+#property version   "1.04"
 #property strict
 #property description "IDC_3 — GOLD M1 Inside Bar. Close breakout of bar#2. No TP. SL+Trailing."
 
@@ -24,8 +24,8 @@ input string InpManualSymbol           = "";                        // Manual sy
 
 input string InpSecRisk                = "=== SL / Trailing (points) ==="; // 
 input int    InpStopLossPoints         = 500;                       // Initial SL (points, mandatory)
-input int    InpTrailingStartPts       = 200;                       // 수익 Start 도달 → SL을 진입가(본전)로
-input int    InpTrailingStepPts        = 10;                        // 본전 이후 가격 추종 스텝 (points)
+input int    InpTrailingStartPts       = 200;                       // 수익 Start→SL을 진입±Start로 이동
+input int    InpTrailingStepPts        = 10;                        // 그 지점부터 Step 간격 추격
 
 input string InpSecLot                 = "=== Lot ===";             // 
 input bool   InpUseAutoLot             = false;                     // Auto lot ON/OFF
@@ -149,7 +149,7 @@ int OnInit()
    if(CountOurPositions() > 0)
       g_trail_armed = false;
 
-   Print("IDC_3 v1.03 init | ", g_symbol,
+   Print("IDC_3 v1.04 init | ", g_symbol,
          " point=", DoubleToStr(g_point, g_digits),
          " gmt_off_sec=", g_gmt_offset_sec,
          " SL=", InpStopLossPoints,
@@ -507,9 +507,12 @@ bool OpenMarket(const int dir, const double h2, const double l2,
 }
 
 //+------------------------------------------------------------------+
-//| Trailing — 원본전략: Start 도달 시 SL→진입가(본전), 이후 Step 추종   |
-//| BUY: profit>=Start → SL=Open(BE); 추가수익 Step마다 SL += Step     |
-//| lock_from_BE = floor((profit-Start)/Step)*Step  (Start 시 0=본전)  |
+//| Trailing — 사용자 명령 락 (BE/진입가 이동 금지)                      |
+//| 예 Start=200 Step=10:                                              |
+//|   수익 200 도달 즉시 SL = 진입 ± 200                                 |
+//|   이후 그 200pt 지점부터 Step(10) 간격 추격 → 210, 220, 230...        |
+//| lock = Start + floor((profit-Start)/Step)*Step                     |
+//| BUY SL = Open + lock / SELL SL = Open - lock                       |
 //+------------------------------------------------------------------+
 void ManageTrailing()
 {
@@ -531,17 +534,17 @@ void ManageTrailing()
    if(profit_pts < InpTrailingStartPts)
       return;
 
-   // 원본: Start 도달 → 본전(진입가). 이후 Step 단위로 추종.
    double extra = profit_pts - InpTrailingStartPts;
    int steps = (int)MathFloor(extra / InpTrailingStepPts + 1e-8);
    if(steps < 0) steps = 0;
-   int lock_from_be = steps * InpTrailingStepPts; // 0 = 진입가 본전
+   // 최초 이동 = Start(200). 이후 Start+10, Start+20...
+   int lock_pts = InpTrailingStartPts + steps * InpTrailingStepPts;
 
    double desired_sl;
    if(type == OP_BUY)
-      desired_sl = NormalizeDouble(open_price + PtsPrice(lock_from_be), g_digits);
+      desired_sl = NormalizeDouble(open_price + PtsPrice(lock_pts), g_digits);
    else
-      desired_sl = NormalizeDouble(open_price - PtsPrice(lock_from_be), g_digits);
+      desired_sl = NormalizeDouble(open_price - PtsPrice(lock_pts), g_digits);
 
    if(InpUseSLGuardian)
    {
@@ -571,9 +574,16 @@ void ManageTrailing()
 
    ResetLastError();
    if(!OrderModify(ticket, open_price, desired_sl, 0, 0, clrYellow))
-      Print("IDC_3: trail modify fail #", ticket, " err=", GetLastError());
+      Print("IDC_3: trail modify fail #", ticket, " err=", GetLastError(),
+            " lock_pts=", lock_pts, " profit=", profit_pts);
    else
+     {
       g_trail_armed = true;
+      if(InpDebugLog)
+         Print("IDC_3: TRAIL OK #", ticket, " lock=", lock_pts,
+               " pts SL=", DoubleToStr(desired_sl, g_digits),
+               " profit=", profit_pts);
+     }
 }
 
 //+------------------------------------------------------------------+
@@ -984,20 +994,20 @@ void DrawPanel()
    }
 
    string s = "";
-   s += "IDC_3 v1.03 | GOLD M1 Inside Bar\n";
+   s += "IDC_3 v1.04 | GOLD M1 Inside Bar\n";
    s += g_symbol + " M1 | point=" + DoubleToStr(g_point, g_digits);
    s += " | spread=" + IntegerToString(SpreadPoints()) + " pts\n";
    s += "GMT offset(sec): " + IntegerToString(g_gmt_offset_sec) + "\n";
    s += "Session: " + (IsWithinTradingHours() ? "OPEN" : "CLOSED");
    s += " | DailyLoss: " + (g_daily_loss_hit ? "HIT" : "ok") + "\n";
    s += "SL: " + IntegerToString(EffectiveSLPts()) + " pts (set " + IntegerToString(InpStopLossPoints) + ")";
-   s += " | Trail: BE@" + IntegerToString(InpTrailingStartPts) + " step " + IntegerToString(InpTrailingStepPts) + "\n";
+   s += " | Trail: lock@" + IntegerToString(InpTrailingStartPts) + "+" + IntegerToString(InpTrailingStepPts) + "step\n";
    s += "TP: NONE | Pos: " + IntegerToString(CountOurPositions());
    s += " | Lot: " + (InpUseAutoLot ? "AUTO" : "FIXED") + "\n";
    s += "Guardian: " + (InpUseSLGuardian ? "ON" : "OFF");
    s += " | TrailArmed: " + (g_trail_armed ? "Y" : "N") + "\n";
    s += "LastSignal: " + g_last_signal + " | " + g_last_block + "\n";
-   s += "Lines: #1/#2 custom | span #1..#3 only | #3 body>wicks\n";
+   s += "Trail: @Start SL=Open+/-Start then +Step | #3 close+body\n";
    Comment(s);
 }
 

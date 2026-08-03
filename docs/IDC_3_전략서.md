@@ -1,6 +1,6 @@
 # IDC_3 — GOLD M1 Inside Bar System
 
-## Spec lock v1.03
+## Spec lock v1.04
 
 | 항목 | 내용 |
 |------|------|

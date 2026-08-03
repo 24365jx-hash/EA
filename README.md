@@ -4,7 +4,7 @@
 
 | 항목 | 경로 |
 |------|------|
-| EA | [`MQL4/Experts/IDC_3.mq4`](MQL4/Experts/IDC_3.mq4) **v1.02** |
+| EA | [`MQL4/Experts/IDC_3.mq4`](MQL4/Experts/IDC_3.mq4) **v1.03** |
 | 전략서(스펙 락) | [`docs/IDC_3_전략서.md`](docs/IDC_3_전략서.md) |
 | 전수 매핑 검수 | [`docs/IDC_3_MAPPING_AUDIT.md`](docs/IDC_3_MAPPING_AUDIT.md) |
 | 프리셋 | [`MQL4/Presets/IDC_3_XAUUSD_M1.set`](MQL4/Presets/IDC_3_XAUUSD_M1.set) |
