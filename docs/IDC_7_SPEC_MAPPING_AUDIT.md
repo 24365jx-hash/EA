@@ -1,7 +1,19 @@
 # IDC_7 — 원본전략 전수 매핑 · 검수 보고서
 
 - **EA 파일**: `MQL4/Experts/IDC_7.mq4`
-- **버전**: 1.00
+- **버전**: 1.01
+
+## BUGFIX v1.01 — 트레일링 중 손실 마감
+
+**증상**: TrailingStart(예: 50pt) 도달 후 트레일 이동이 보이는데 항상 손실로 청산.
+
+**원인**: `ModifySL()`이 브로커 `STOPLEVEL` 미달 시 요청 SL(본전)을 시장가 방향으로 **클램프**하여 진입가보다 나쁜 손실 SL로 내려 씀. 이후 STAGE1 완료 처리 → 되돌림에 손실 SL 체결.
+
+**수정**:
+1. STOPLEVEL 미달 시 클램프 금지 → 수정 거부
+2. 수익이 STOPLEVEL 미만이면 STAGE1 대기
+3. 실제 `OrderStopLoss()`가 본전 이상일 때만 STAGE1 완료
+4. STAGE2 타깃이 본전 미만/STOPLEVEL 미달이면 스킵
 - **대상 플랫폼**: MT4 (`#property strict`)
 - **검수 기준**: 사용자 제공 `[EA 시스템 원본 전략 명세서 : IDC_7]` 전문
 - **정적 검사**: `tools/mql4_static_check.py` → **PASS**

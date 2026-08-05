@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 #property description "IDC_7 — Gold M1 consecutive-tick pending EA (MT4)"
 
@@ -145,6 +145,10 @@ void   ManageOpenPosition();
 void   ManageTrailingStop();
 void   SLGuardianTick();
 bool   ClosePositionMarket(const int ticket, const string reason);
+double BrokerMinStopDistance();
+int    BrokerMinStopPoints();
+bool   IsSLDistanceValid(const int type, const double sl);
+bool   IsBreakEvenSL(const int type, const double sl, const double openPrice);
 bool   ModifySL(const int ticket, const double newSL);
 
 void   UpdateDashboard();
@@ -943,6 +947,47 @@ void ManageOpenPosition()
      }
   }
 
+double BrokerMinStopDistance()
+  {
+   double stopLvl = MarketInfo(TradeSymbol(), MODE_STOPLEVEL) * g_point;
+   double freeze  = MarketInfo(TradeSymbol(), MODE_FREEZELEVEL) * g_point;
+   return(MathMax(stopLvl, freeze));
+  }
+
+int BrokerMinStopPoints()
+  {
+   if(g_point <= 0.0)
+      return(0);
+   return((int)MathCeil(BrokerMinStopDistance() / g_point));
+  }
+
+// 요청 SL이 브로커 STOPLEVEL/FREEZELEVEL을 만족하는지 (클램프 금지 — 손실 SL로 끌어내리지 않음)
+bool IsSLDistanceValid(const int type, const double sl)
+  {
+   double minDist = BrokerMinStopDistance();
+   if(minDist <= 0.0)
+      return(true);
+
+   RefreshRates();
+   if(type == OP_BUY)
+      return(TradeBid() - sl >= minDist - g_point * 0.1);
+   if(type == OP_SELL)
+      return(sl - TradeAsk() >= minDist - g_point * 0.1);
+   return(false);
+  }
+
+bool IsBreakEvenSL(const int type, const double sl, const double openPrice)
+  {
+   if(sl <= 0.0 || g_point <= 0.0)
+      return(false);
+   if(type == OP_BUY)
+      return(sl >= openPrice - g_point * 0.1);
+   if(type == OP_SELL)
+      return(sl <= openPrice + g_point * 0.1);
+   return(false);
+  }
+
+// 요청한 SL 그대로만 적용. STOPLEVEL 미달 시 절대 시장쪽으로 클램프하지 않고 거부.
 bool ModifySL(const int ticket, const double newSL)
   {
    if(!SelectOurOrderByTicket(ticket))
@@ -954,25 +999,22 @@ bool ModifySL(const int ticket, const double newSL)
    int    type      = OrderType();
    double sl        = NormalizeTradePrice(newSL);
 
-   double stopLvl = MarketInfo(TradeSymbol(), MODE_STOPLEVEL) * g_point;
-   double freeze  = MarketInfo(TradeSymbol(), MODE_FREEZELEVEL) * g_point;
-   double minDist = MathMax(stopLvl, freeze);
+   if(!IsSLDistanceValid(type, sl))
+     {
+      LogDebug("ModifySL rejected (stop/freeze level) ticket=" + IntegerToString(ticket) +
+               " wantSL=" + DoubleToString(sl, g_digits) +
+               " minPts=" + IntegerToString(BrokerMinStopPoints()));
+      return(false);
+     }
 
-   RefreshRates();
-
+   // 유리 방향만 허용 (동일/불리 거부). SL=0 초기주입은 허용.
    if(type == OP_BUY)
      {
-      double maxSL = TradeBid() - minDist;
-      if(minDist > 0.0 && sl > maxSL)
-         sl = NormalizeTradePrice(maxSL);
       if(curSL > 0.0 && sl <= curSL + g_point * 0.1)
-         return(false); // 불리/동일 수정 금지
+         return(false);
      }
    else if(type == OP_SELL)
      {
-      double minSL = TradeAsk() + minDist;
-      if(minDist > 0.0 && sl < minSL)
-         sl = NormalizeTradePrice(minSL);
       if(curSL > 0.0 && sl >= curSL - g_point * 0.1)
          return(false);
      }
@@ -988,6 +1030,17 @@ bool ModifySL(const int ticket, const double newSL)
             " sl=", DoubleToString(sl, g_digits));
       return(false);
      }
+
+   // 실제 체결된 SL 재확인
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+      return(false);
+
+   double actualSL = OrderStopLoss();
+   if(type == OP_BUY && actualSL < sl - g_point * 0.5)
+      return(false);
+   if(type == OP_SELL && (actualSL <= 0.0 || actualSL > sl + g_point * 0.5))
+      return(false);
+
    return(true);
   }
 
@@ -1034,37 +1087,51 @@ void ManageTrailingStop()
         }
 
       double targetSL = 0.0;
+      int minStopPts = BrokerMinStopPoints();
 
       //--- 1단계: SL → 진입가 (원금 보존)
+      // STOPLEVEL보다 수익이 작으면 본전 SL 자체가 불법 → 대기 (절대 손실쪽으로 당기지 않음)
       if(!g_trailStage1Done)
         {
-         targetSL = NormalizeTradePrice(openPrice);
-
-         // 이미 BE 이상이면 1단계 완료 처리
-         bool alreadyBE = false;
-         if(type == OP_BUY && curSL > 0.0 && curSL >= openPrice - point * 0.1)
-            alreadyBE = true;
-         if(type == OP_SELL && curSL > 0.0 && curSL <= openPrice + point * 0.1)
-            alreadyBE = true;
-
-         if(alreadyBE)
+         if(IsBreakEvenSL(type, curSL, openPrice))
            {
             g_trailStage1Done = true;
            }
+         else if(profitPts + 1.0e-9 < (double)minStopPts)
+           {
+            g_dashReason = "TRAIL_WAIT_STOPLEVEL";
+            LogDebug("STAGE1 wait stop level ticket=" + IntegerToString(ticket) +
+                     " profitPts=" + DoubleToString(profitPts, 1) +
+                     " needPts>=" + IntegerToString(minStopPts));
+            continue;
+           }
          else
            {
+            targetSL = NormalizeTradePrice(openPrice);
             if(ModifySL(ticket, targetSL))
               {
-               g_trailStage1Done = true;
-               Print("IDC_7: trailing STAGE1 BE ticket=", ticket,
-                     " sl=", DoubleToString(targetSL, g_digits),
-                     " profitPts=", DoubleToString(profitPts, 1));
+               // 실제 SL이 본전 이상인지 재검증 후에만 STAGE1 완료
+               if(OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES) &&
+                  IsBreakEvenSL(type, OrderStopLoss(), openPrice))
+                 {
+                  g_trailStage1Done = true;
+                  Print("IDC_7: trailing STAGE1 BE ticket=", ticket,
+                        " sl=", DoubleToString(OrderStopLoss(), g_digits),
+                        " profitPts=", DoubleToString(profitPts, 1),
+                        " minStopPts=", minStopPts);
+                 }
+               else
+                 {
+                  Print("IDC_7: STAGE1 BE verify FAIL ticket=", ticket,
+                        " actualSL=", DoubleToString(OrderStopLoss(), g_digits),
+                        " open=", DoubleToString(openPrice, g_digits));
+                 }
               }
-            continue; // 1단계 처리 후 이번 틱은 종료 (다음 틱부터 2단계)
+            continue; // 1단계 처리 후 이번 틱은 종료
            }
         }
 
-      //--- 2단계: TrailingStep 간격 실시간 추격
+      //--- 2단계: TrailingStep 간격 실시간 추격 (본전 이상만)
       if(InpTrailingStepPts <= 0)
          continue;
 
@@ -1080,6 +1147,16 @@ void ManageTrailingStop()
 
       targetSL = NormalizeTradePrice(targetSL);
 
+      // 본전 미만으로 내려가는 타깃 금지
+      if(type == OP_BUY && targetSL < openPrice - point * 0.1)
+         continue;
+      if(type == OP_SELL && targetSL > openPrice + point * 0.1)
+         continue;
+
+      // STOPLEVEL 미달이면 이번 스텝 스킵 (클램프하여 손실 SL 만들지 않음)
+      if(!IsSLDistanceValid(type, targetSL))
+         continue;
+
       bool improve = false;
       if(type == OP_BUY)
          improve = (curSL == 0.0 || targetSL > curSL + point * 0.5);
@@ -1091,10 +1168,11 @@ void ManageTrailingStop()
 
       if(ModifySL(ticket, targetSL))
         {
-         LogDebug("trailing STAGE2 ticket=" + IntegerToString(ticket) +
-                  " sl=" + DoubleToString(targetSL, g_digits) +
-                  " steps=" + IntegerToString(steps) +
-                  " profitPts=" + DoubleToString(profitPts, 1));
+         if(OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+            Print("IDC_7: trailing STAGE2 ticket=", ticket,
+                  " sl=", DoubleToString(OrderStopLoss(), g_digits),
+                  " steps=", steps,
+                  " profitPts=", DoubleToString(profitPts, 1));
         }
      }
   }
