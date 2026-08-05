@@ -7,7 +7,7 @@ XAUUSD(골드) 전용 M1 Expert Advisor.
 1. **연속 틱** N회(기본 6) 동일 방향
 2. **이동 거리** P포인트(기본 200) 이상
 3. **강한 추세 필터**(ATR/EMA, ON/OFF) 통과  
-→ 현재가 ± Pending Distance에 **BuyStop / SellStop** 발주  
+→ **역방향** Pending: 상승틱→**SellStop** / 하락틱→**BuyStop**  
 → M1 캔들 내 미체결 시 자동 취소 / 단일 포지션  
 → SL 300 + 2단계 트레일링(본전→스텝 추격) + SL 가디언
 

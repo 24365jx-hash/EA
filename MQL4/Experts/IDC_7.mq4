@@ -3,12 +3,12 @@
 //| EA 명칭       : IDC_7                                             |
 //| 적용 시장     : XAUUSD (골드 전용 / 브로커 심볼 자동 감지)         |
 //| 추천 TF       : M1 (메인) / M5 참고                               |
-//| 운용 방식     : OnTick 조건 분석 + Pending(BuyStop/SellStop)      |
+//| 운용 방식     : OnTick 조건 + 역방향 Pending(BuyStop/SellStop)    |
 //| 수치 표준     : Point 단위 (10 Points = 1 Pip = $0.1 on gold)     |
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 #property description "IDC_7 — Gold M1 consecutive-tick pending EA (MT4)"
 
@@ -844,7 +844,9 @@ bool TryPlacePendingOrder()
       return(false);
      }
 
-   int orderType = (g_tickDir == TICK_UP) ? OP_BUYSTOP : OP_SELLSTOP;
+   // 원본전략: 역방향 진입
+   // 상승 연속틱 → SellStop (아래) / 하락 연속틱 → BuyStop (위)
+   int orderType = (g_tickDir == TICK_UP) ? OP_SELLSTOP : OP_BUYSTOP;
    return(PlacePending(orderType, lots));
   }
 

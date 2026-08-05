@@ -1,7 +1,16 @@
 # IDC_7 — 원본전략 전수 매핑 · 검수 보고서
 
 - **EA 파일**: `MQL4/Experts/IDC_7.mq4`
-- **버전**: 1.01
+- **버전**: 1.02
+
+## FIX v1.02 — 역방향 진입 (원본전략)
+
+| 연속 틱 | 발주 |
+|---|---|
+| 상승 N회 | **SellStop** (Bid − Pending Distance) |
+| 하락 N회 | **BuyStop** (Ask + Pending Distance) |
+
+코드: `TryPlacePendingOrder` — `UP→OP_SELLSTOP`, `DOWN→OP_BUYSTOP`
 
 ## BUGFIX v1.01 — 트레일링 중 손실 마감
 
@@ -91,7 +100,7 @@
 
 | 명세 | 구현 | 판정 |
 |---|---|---|
-| 조건 충족 시 현재가±Pending Distance에 BuyStop/SellStop | UP→BuyStop(Ask+dist), DOWN→SellStop(Bid−dist) | OK |
+| 조건 충족 시 현재가±Pending Distance에 BuyStop/SellStop | **역방향** UP→SellStop(Bid−dist), DOWN→BuyStop(Ask+dist) | OK |
 | Pending Distance 파라미터 | `InpPendingDistancePts` (명세 디폴트 미기재 → **50** 적용, 섹션 H) | OK* |
 | M1 한 캔들 내 미체결 시 신규 캔들에서 자동 취소 | `ManagePendingCandleLifetime` → `OrderDelete` | OK |
 | 포지션 열리면 청산 전 추가 진입 금지 | `CountOurPositions()>0` / `CountOurPendings()>0` 차단 | OK |
