@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.05"
+#property version   "1.06"
 #property strict
 #property description "IDC_7 — Gold/US30/Nasdaq M1 pending EA (MT4)"
 
@@ -120,6 +120,8 @@ bool   IsSupportedSymbolName(const string sym);
 bool   BindChartSupportedSymbol();
 double BrokerMinStopDistance();
 int    BrokerMinStopPoints();
+int    EffectiveMinStopPoints();
+void   RefreshTradeQuotes();
 double NormalizeToTick(const double price);
 bool   InitTradeSymbol();
 void   RefreshSymbolMeta();
@@ -336,6 +338,15 @@ void RefreshSymbolMeta()
   {
    g_point  = MarketInfo(TradeSymbol(), MODE_POINT);
    g_digits = (int)MarketInfo(TradeSymbol(), MODE_DIGITS);
+  }
+
+void RefreshTradeQuotes()
+  {
+   string sym = TradeSymbol();
+   SymbolSelect(sym, true);
+   iTime(sym, PERIOD_M1, 0);
+   iClose(sym, PERIOD_M1, 0);
+   RefreshRates();
   }
 
 bool IsGoldSymbolName(const string sym)
@@ -988,58 +999,73 @@ bool PlacePending(const int orderType, const double lots)
    if(orderType != OP_BUYSTOP && orderType != OP_SELLSTOP)
       return(false);
 
-   int minPts = BrokerMinStopPoints();
-   if(minPts < 1)
-      minPts = 1;
-
-   int pendPts = (int)MathMax(InpPendingDistancePts, minPts + 1);
-   int slPts   = (int)MathMax(InpStopLossPts, minPts + 1);
-
    color clr = (orderType == OP_BUYSTOP) ? clrDodgerBlue : clrOrangeRed;
    double tp = 0.0;
 
-   for(int attempt = 0; attempt < 3; attempt++)
+   for(int attempt = 0; attempt < 5; attempt++)
      {
-      RefreshRates();
+      RefreshTradeQuotes();
+      RefreshSymbolMeta();
+
       double ask = TradeAsk();
       double bid = TradeBid();
       if(ask <= 0.0 || bid <= 0.0)
          return(false);
 
+      int minPts = EffectiveMinStopPoints() + attempt * 50;
+      int pendPts = (int)MathMax(InpPendingDistancePts, minPts + 1);
+      int slPts   = (int)MathMax(InpStopLossPts, minPts + 1);
+
       double minDist = PointsToPrice(minPts);
-      double entry   = 0.0;
-      double sl      = 0.0;
+      double spreadDist = ask - bid;
+      if(spreadDist > minDist)
+         minDist = spreadDist;
+
+      double entry = 0.0;
+      double sl    = 0.0;
 
       if(orderType == OP_BUYSTOP)
         {
-         double minEntry = ask + minDist;
+         // BuyStop: 반드시 Ask + STOPLEVEL 위
          entry = NormalizeToTick(ask + PointsToPrice(pendPts));
-         if(entry <= minEntry + g_point * 0.1)
+         double minEntry = ask + minDist + g_point;
+         if(entry <= minEntry)
             entry = NormalizeToTick(minEntry + PointsToPrice(1));
+
          sl = NormalizeToTick(entry - PointsToPrice(slPts));
-         if(sl >= entry - minDist + g_point * 0.1)
-            sl = NormalizeToTick(entry - minDist - PointsToPrice(1));
-         if(entry <= ask + g_point * 0.1)
+         double maxSl = entry - minDist - g_point;
+         if(sl >= maxSl)
+            sl = NormalizeToTick(maxSl);
+
+         if(entry <= ask + g_point * 0.5 || sl >= entry - g_point * 0.5)
            {
-            Print("IDC_7: BuyStop entry invalid vs Ask | ask=", ask,
-                  " entry=", entry, " minPts=", minPts);
-            return(false);
+            Print("IDC_7: BuyStop price reject | ask=", DoubleToString(ask, g_digits),
+                  " entry=", DoubleToString(entry, g_digits),
+                  " sl=", DoubleToString(sl, g_digits),
+                  " minPts=", minPts);
+            continue;
            }
         }
       else
         {
-         double maxEntry = bid - minDist;
+         // SellStop: 반드시 Bid - STOPLEVEL 아래
          entry = NormalizeToTick(bid - PointsToPrice(pendPts));
-         if(entry >= maxEntry - g_point * 0.1)
+         double maxEntry = bid - minDist - g_point;
+         if(entry >= maxEntry)
             entry = NormalizeToTick(maxEntry - PointsToPrice(1));
+
          sl = NormalizeToTick(entry + PointsToPrice(slPts));
-         if(sl <= entry + minDist - g_point * 0.1)
-            sl = NormalizeToTick(entry + minDist + PointsToPrice(1));
-         if(entry >= bid - g_point * 0.1)
+         double minSl = entry + minDist + g_point;
+         if(sl <= minSl)
+            sl = NormalizeToTick(minSl);
+
+         if(entry >= bid - g_point * 0.5 || sl <= entry + g_point * 0.5)
            {
-            Print("IDC_7: SellStop entry invalid vs Bid | bid=", bid,
-                  " entry=", entry, " minPts=", minPts);
-            return(false);
+            Print("IDC_7: SellStop price reject | bid=", DoubleToString(bid, g_digits),
+                  " entry=", DoubleToString(entry, g_digits),
+                  " sl=", DoubleToString(sl, g_digits),
+                  " minPts=", minPts);
+            continue;
            }
         }
 
@@ -1072,12 +1098,14 @@ bool PlacePending(const int orderType, const double lots)
       int err = GetLastError();
       Print("IDC_7: OrderSend pending failed attempt=", attempt + 1,
             " type=", orderType,
-            " lots=", DoubleToString(lots, 2),
+            " sym=", TradeSymbol(),
             " bid=", DoubleToString(bid, g_digits),
             " ask=", DoubleToString(ask, g_digits),
             " entry=", DoubleToString(entry, g_digits),
             " sl=", DoubleToString(sl, g_digits),
             " minStopPts=", minPts,
+            " slPts=", slPts,
+            " pendPts=", pendPts,
             " err=", err);
       g_dashReason = "ORDERSEND_ERR:" + IntegerToString(err);
       ResetLastError();
@@ -1121,6 +1149,33 @@ int BrokerMinStopPoints()
    if(g_point <= 0.0)
       return(0);
    return((int)MathCeil(BrokerMinStopDistance() / g_point));
+  }
+
+// MT4가 STOPLEVEL=0으로 주는 지수(CFD)에서 Invalid prices 방지용 하한
+int EffectiveMinStopPoints()
+  {
+   int brokerPts = BrokerMinStopPoints();
+   string sym    = TradeSymbol();
+
+   if(IsUs30SymbolName(sym) || IsNasdaqSymbolName(sym))
+     {
+      int indexFloor = 270;
+      if(brokerPts > indexFloor)
+         return(brokerPts);
+      return(indexFloor);
+     }
+
+   if(IsGoldSymbolName(sym))
+     {
+      int goldFloor = 50;
+      if(brokerPts > goldFloor)
+         return(brokerPts);
+      return(goldFloor);
+     }
+
+   if(brokerPts < 1)
+      return(1);
+   return(brokerPts);
   }
 
 // 요청 SL이 브로커 STOPLEVEL/FREEZELEVEL을 만족하는지 (클램프 금지 — 손실 SL로 끌어내리지 않음)
