@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.07"
+#property version   "1.08"
 #property strict
 #property description "IDC_7 — Gold/US30/Nasdaq M1 pending EA (MT4)"
 
@@ -52,8 +52,8 @@ input int    InpMaxEMADiffPts    = 100;      // Max EMA 1바 기울기 Points (�
 
 input string InpSepExit          = "======== EXIT / TRAILING ========"; // —
 input int    InpStopLossPts      = 300;      // SL Points (default 300=$3.0) / TP=0 고정
-input int    InpTrailingStartPts = 200;      // 1단계: 본전이동 트리거 Points
-input int    InpTrailingStepPts  = 10;       // 2단계: 추격 스텝 Points
+input int    InpTrailingStartPts = 200;      // 트레일 시작 수익 Points (본전 무관)
+input int    InpTrailingStepPts  = 10;       // 시작점부터 추격 스텝 Points
 
 input string InpSepRisk          = "======== RISK / MONEY ========"; // —
 input bool   InpSLGuardianOn     = true;     // SL 가디언 ON/OFF
@@ -92,9 +92,8 @@ double       g_seqMovePts      = 0.0;
 datetime g_pendingBarTime = 0;
 int      g_pendingTicket  = -1;
 
-//--- trailing stage tracking (per ticket)
-int      g_trailTicket    = -1;
-bool     g_trailStage1Done = false;
+//--- trailing (per ticket)
+int      g_trailTicket = -1;
 
 //--- daily loss
 datetime g_dayStamp        = 0;
@@ -157,8 +156,7 @@ bool   ClosePositionMarket(const int ticket, const string reason);
 double BrokerMinStopDistance();
 int    BrokerMinStopPoints();
 bool   IsSLDistanceValid(const int type, const double sl);
-double CalcStage2TargetSL(const int type, const double openPrice, const int steps);
-bool   IsBreakEvenSL(const int type, const double sl, const double openPrice);
+double CalcTrailingTargetSL(const int type, const double openPrice, const int lockedPts);
 bool   ModifySL(const int ticket, const double newSL);
 
 void   UpdateDashboard();
@@ -221,8 +219,7 @@ int OnInit()
    g_seqMovePts     = 0.0;
    g_pendingBarTime = 0;
    g_pendingTicket  = -1;
-   g_trailTicket    = -1;
-   g_trailStage1Done = false;
+   g_trailTicket = -1;
    g_dashReason     = "INIT";
 
    // recover pending ticket if EA restarted mid-pending
@@ -1079,7 +1076,6 @@ bool PlacePending(const int orderType, const double lots)
          g_pendingTicket   = ticket;
          g_pendingBarTime  = iTime(TradeSymbol(), PERIOD_M1, 0);
          g_trailTicket     = -1;
-         g_trailStage1Done = false;
 
          Print("IDC_7: pending placed ticket=", ticket,
                " type=", (orderType == OP_BUYSTOP ? "BUYSTOP" : "SELLSTOP"),
@@ -1134,7 +1130,6 @@ void ManageOpenPosition()
    if(CountOurPositions() == 0)
      {
       g_trailTicket     = -1;
-      g_trailStage1Done = false;
      }
   }
 
@@ -1195,52 +1190,36 @@ bool IsSLDistanceValid(const int type, const double sl)
    return(false);
   }
 
-// 2단계 추격 SL: 이상값(계단) + 브로커 STOPLEVEL 이내로 캡
-double CalcStage2TargetSL(const int type,
+// 트레일 SL = 진입가 ± lockedPts (Start + n×Step), STOPLEVEL 캡
+double CalcTrailingTargetSL(const int type,
                           const double openPrice,
-                          const int steps)
+                          const int lockedPts)
   {
-   if(steps <= 0)
+   if(lockedPts <= 0)
       return(0.0);
 
-   double lockedPts = (double)(steps * InpTrailingStepPts);
-   double minDist   = PointsToPrice(EffectiveMinStopPoints());
+   double minDist = PointsToPrice(EffectiveMinStopPoints());
    double ideal     = 0.0;
    double capped    = 0.0;
 
    if(type == OP_BUY)
      {
-      ideal  = openPrice + PointsToPrice((int)lockedPts);
+      ideal  = openPrice + PointsToPrice(lockedPts);
       capped = TradeBid() - minDist - g_point;
       if(ideal > capped)
          ideal = capped;
-      if(ideal < openPrice - g_point * 0.1)
-         return(0.0);
      }
    else if(type == OP_SELL)
      {
-      ideal  = openPrice - PointsToPrice((int)lockedPts);
+      ideal  = openPrice - PointsToPrice(lockedPts);
       capped = TradeAsk() + minDist + g_point;
       if(ideal < capped)
          ideal = capped;
-      if(ideal > openPrice + g_point * 0.1)
-         return(0.0);
      }
    else
       return(0.0);
 
    return(NormalizeToTick(ideal));
-  }
-
-bool IsBreakEvenSL(const int type, const double sl, const double openPrice)
-  {
-   if(sl <= 0.0 || g_point <= 0.0)
-      return(false);
-   if(type == OP_BUY)
-      return(sl >= openPrice - g_point * 0.1);
-   if(type == OP_SELL)
-      return(sl <= openPrice + g_point * 0.1);
-   return(false);
   }
 
 // 요청한 SL 그대로만 적용. STOPLEVEL 미달 시 절대 시장쪽으로 클램프하지 않고 거부.
@@ -1333,62 +1312,34 @@ void ManageTrailingStop()
       else
          profitPts = (openPrice - TradeAsk()) / point;
 
-      if(profitPts < (double)InpTrailingStartPts)
+      if(profitPts + 1.0e-9 < (double)InpTrailingStartPts)
          continue;
 
       if(g_trailTicket != ticket)
+         g_trailTicket = ticket;
+
+      int steps = 0;
+      if(InpTrailingStepPts > 0)
         {
-         g_trailTicket     = ticket;
-         g_trailStage1Done = false;
+         double beyond = profitPts - (double)InpTrailingStartPts;
+         steps = (int)MathFloor(beyond / (double)InpTrailingStepPts);
+         if(steps < 0)
+            steps = 0;
         }
 
-      int effMinPts = EffectiveMinStopPoints();
-      double targetSL = 0.0;
-
-      //--- 1단계: SL → 진입가 (본전). DJ30 등은 수익이 STOPLEVEL 이상이어야 가능
-      if(!g_trailStage1Done)
-        {
-         if(IsBreakEvenSL(type, curSL, openPrice))
-           {
-            g_trailStage1Done = true;
-           }
-         else if(profitPts + 1.0e-9 < (double)effMinPts)
-           {
-            g_dashReason = "TRAIL_WAIT_STOPLEVEL";
-            continue;
-           }
-         else
-           {
-            targetSL = NormalizeToTick(openPrice);
-            if(ModifySL(ticket, targetSL) &&
-               OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES) &&
-               IsBreakEvenSL(type, OrderStopLoss(), openPrice))
-              {
-               g_trailStage1Done = true;
-               Print("IDC_7: trailing STAGE1 BE ticket=", ticket,
-                     " sl=", DoubleToString(OrderStopLoss(), g_digits),
-                     " profitPts=", DoubleToString(profitPts, 1),
-                     " effMinPts=", effMinPts);
-              }
-            continue;
-           }
-        }
-
-      //--- 2단계: TrailingStep 추격 (STOPLEVEL 캡 적용)
-      if(InpTrailingStepPts <= 0)
-         continue;
-
-      double beyond = profitPts - (double)InpTrailingStartPts;
-      int steps = (int)MathFloor(beyond / (double)InpTrailingStepPts);
-      if(steps <= 0)
-         continue;
-
-      targetSL = CalcStage2TargetSL(type, openPrice, steps);
+      int lockedPts = InpTrailingStartPts + steps * InpTrailingStepPts;
+      double targetSL = CalcTrailingTargetSL(type, openPrice, lockedPts);
       if(targetSL <= 0.0)
+        {
+         g_dashReason = "TRAIL_WAIT_STOPLEVEL";
          continue;
+        }
 
       if(!IsSLDistanceValid(type, targetSL))
+        {
+         g_dashReason = "TRAIL_WAIT_STOPLEVEL";
          continue;
+        }
 
       bool improve = false;
       if(type == OP_BUY)
@@ -1402,11 +1353,11 @@ void ManageTrailingStop()
       if(ModifySL(ticket, targetSL))
         {
          if(OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
-            Print("IDC_7: trailing STAGE2 ticket=", ticket,
+            Print("IDC_7: trailing ticket=", ticket,
                   " sl=", DoubleToString(OrderStopLoss(), g_digits),
+                  " lockedPts=", lockedPts,
                   " steps=", steps,
-                  " profitPts=", DoubleToString(profitPts, 1),
-                  " effMinPts=", effMinPts);
+                  " profitPts=", DoubleToString(profitPts, 1));
         }
      }
   }
@@ -1490,7 +1441,6 @@ bool ClosePositionMarket(const int ticket, const string reason)
 
    Print("IDC_7: position closed ticket=", ticket, " reason=", reason);
    g_trailTicket     = -1;
-   g_trailStage1Done = false;
    return(true);
   }
 
@@ -1569,7 +1519,7 @@ void UpdateDashboard()
                         atrPts, InpMaxATRPts, emaDiffPts, InpMaxEMADiffPts), neuC);
    DashAdd(StringFormat("PendingDist: %d pts   SL: %d pts   TP: 0",
                         InpPendingDistancePts, InpStopLossPts), neuC);
-   DashAdd(StringFormat("Trail: start %d → BE, step %d",
+   DashAdd(StringFormat("Trail: start %d pts, step %d pts (no BE lock)",
                         InpTrailingStartPts, InpTrailingStepPts), neuC);
    DashAdd(StringFormat("Lot: %s  lots=%.2f  risk%%=%.2f",
                         (InpLotMode == LOT_MANUAL ? "MANUAL" : "AUTO"),
@@ -1583,10 +1533,9 @@ void UpdateDashboard()
                         InpStartHour, InpStartMinute, InpEndHour, InpEndMinute,
                         (IsWithinTimeFilter() ? "IN" : "OUT")),
            (IsWithinTimeFilter() ? okC : badC));
-   DashAdd(StringFormat("Pos: %d  Pending: %d  Guard: %s  Stage1: %s",
+   DashAdd(StringFormat("Pos: %d  Pending: %d  Guard: %s",
                         CountOurPositions(), CountOurPendings(),
-                        (InpSLGuardianOn ? "ON" : "OFF"),
-                        (g_trailStage1Done ? "DONE" : "WAIT")), neuC);
+                        (InpSLGuardianOn ? "ON" : "OFF")), neuC);
    DashAdd("Reason: " + g_dashReason, neuC);
 
    int fontSize = InpDashboardFontSize;
