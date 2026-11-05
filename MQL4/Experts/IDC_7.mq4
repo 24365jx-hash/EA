@@ -1,16 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                                         IDC_7.mq4 |
 //| EA 명칭       : IDC_7                                             |
-//| 적용 시장     : XAUUSD (골드 전용 / 브로커 심볼 자동 감지)         |
+//| 적용 시장     : XAUUSD / US30 / 나스닥 (브로커 심볼명 자동 감지)    |
 //| 추천 TF       : M1 (메인) / M5 참고                               |
 //| 운용 방식     : OnTick 조건 + 역방향 Pending(BuyStop/SellStop)    |
 //| 수치 표준     : Point 단위 (10 Points = 1 Pip = $0.1 on gold)     |
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.02"
+#property version   "1.03"
 #property strict
-#property description "IDC_7 — Gold M1 consecutive-tick pending EA (MT4)"
+#property description "IDC_7 — Gold/US30/Nasdaq M1 pending EA (MT4)"
 
 //====================================================================
 // ENUMS
@@ -32,7 +32,7 @@ enum ENUM_TICK_DIR
 // INPUT PARAMETERS — 명세 디폴트 1:1
 //====================================================================
 input string InpSepSys           = "======== SYSTEM ========"; // —
-input bool   InpAutoDetectGold   = true;     // 골드 심볼 자동 감지
+input bool   InpAutoDetectGold   = true;     // 심볼 자동 감지 (골드/US30/나스닥)
 input string InpManualSymbol     = "";       // 수동 심볼 (빈칸=자동)
 input int    InpMagicNumber      = 70007;    // Magic Number
 input int    InpSlippagePts      = 30;       // 시장가 청산 허용 슬리피지(Points)
@@ -114,6 +114,9 @@ int      g_dashCount = 0;
 //====================================================================
 bool   DetectGoldSymbol();
 bool   IsGoldSymbolName(const string sym);
+bool   IsUs30SymbolName(const string sym);
+bool   IsNasdaqSymbolName(const string sym);
+bool   IsSupportedSymbolName(const string sym);
 bool   InitTradeSymbol();
 void   RefreshSymbolMeta();
 string TradeSymbol();
@@ -197,7 +200,7 @@ int OnInit()
 
    if(!InitTradeSymbol())
      {
-      Print("IDC_7: gold symbol detection failed");
+      Print("IDC_7: symbol detection failed (Gold/US30/Nasdaq)");
       return(INIT_FAILED);
      }
 
@@ -334,11 +337,52 @@ bool IsGoldSymbolName(const string sym)
    return(false);
   }
 
+bool IsUs30SymbolName(const string sym)
+  {
+   string upper = sym;
+   StringToUpper(upper);
+   if(upper == "US30" || upper == "DJ30" || upper == "WS30" || upper == "US30CASH")
+      return(true);
+   if(StringFind(upper, "US30") == 0)
+      return(true);
+   if(StringFind(upper, "DJ30") == 0)
+      return(true);
+   if(StringFind(upper, "DOWJ") == 0)
+      return(true);
+   if(StringFind(upper, "WALLST") == 0)
+      return(true);
+   return(false);
+  }
+
+bool IsNasdaqSymbolName(const string sym)
+  {
+   string upper = sym;
+   StringToUpper(upper);
+   if(upper == "NAS100" || upper == "US100" || upper == "USTEC" || upper == "ND100")
+      return(true);
+   if(StringFind(upper, "NAS100") == 0)
+      return(true);
+   if(StringFind(upper, "USTEC") == 0)
+      return(true);
+   if(StringFind(upper, "US100") == 0)
+      return(true);
+   if(StringFind(upper, "ND100") == 0)
+      return(true);
+   if(StringFind(upper, "NASDAQ") >= 0)
+      return(true);
+   return(false);
+  }
+
+bool IsSupportedSymbolName(const string sym)
+  {
+   return(IsGoldSymbolName(sym) || IsUs30SymbolName(sym) || IsNasdaqSymbolName(sym));
+  }
+
 bool IsSymbolTradableGold(const string sym)
   {
    if(StringLen(sym) == 0)
       return(false);
-   if(!IsGoldSymbolName(sym))
+   if(!IsSupportedSymbolName(sym))
       return(false);
    if(!SymbolSelect(sym, true))
       return(false);
@@ -353,6 +397,8 @@ int GoldSymbolPriority(const string sym)
   {
    string upper = sym;
    StringToUpper(upper);
+
+   // Gold
    if(upper == "XAUUSD")
       return(100);
    if(StringFind(upper, "XAUUSD") == 0)
@@ -361,8 +407,31 @@ int GoldSymbolPriority(const string sym)
       return(80);
    if(StringFind(upper, "GOLD") == 0)
       return(70);
-   if(StringFind(upper, "XAU") >= 0)
+   if(IsGoldSymbolName(sym))
       return(60);
+
+   // US30 (Dow)
+   if(upper == "US30")
+      return(100);
+   if(StringFind(upper, "US30") == 0)
+      return(90);
+   if(upper == "DJ30" || StringFind(upper, "DJ30") == 0)
+      return(85);
+   if(IsUs30SymbolName(sym))
+      return(70);
+
+   // Nasdaq
+   if(upper == "USTEC" || upper == "NAS100" || upper == "US100")
+      return(100);
+   if(StringFind(upper, "USTEC") == 0 || StringFind(upper, "NAS100") == 0)
+      return(90);
+   if(StringFind(upper, "US100") == 0)
+      return(88);
+   if(StringFind(upper, "ND100") == 0)
+      return(85);
+   if(IsNasdaqSymbolName(sym))
+      return(70);
+
    return(10);
   }
 
@@ -388,39 +457,38 @@ bool DetectGoldSymbol()
      {
       if(!TrySetTradeSymbol(InpManualSymbol, best_sym, best_rank))
         {
-         Print("IDC_7: manual symbol not tradable gold: ", InpManualSymbol);
+         Print("IDC_7: manual symbol not supported/tradable: ", InpManualSymbol);
          return(false);
         }
       g_tradeSymbol = best_sym;
       return(true);
      }
 
-   if(!InpAutoDetectGold)
+   // 차트 심볼이 지원 종목이면 우선 고정 (US30/나스닥 차트에서 골드로 바뀌지 않음)
+   if(IsSymbolTradableGold(Symbol()))
      {
-      if(IsSymbolTradableGold(Symbol()))
-        {
-         g_tradeSymbol = Symbol();
-         return(true);
-        }
-      Print("IDC_7: chart symbol is not tradable gold and auto-detect is OFF");
-      return(false);
+      g_tradeSymbol = Symbol();
+      return(true);
      }
 
-   // chart symbol first
-   TrySetTradeSymbol(Symbol(), best_sym, best_rank);
+   if(!InpAutoDetectGold)
+     {
+      Print("IDC_7: chart symbol not supported (Gold/US30/Nasdaq) and auto-detect is OFF");
+      return(false);
+     }
 
    int total = SymbolsTotal(false);
    for(int i = 0; i < total; i++)
      {
       string sym = SymbolName(i, false);
-      if(!IsGoldSymbolName(sym))
+      if(!IsSupportedSymbolName(sym))
          continue;
       TrySetTradeSymbol(sym, best_sym, best_rank);
      }
 
    if(best_sym == "")
      {
-      Print("IDC_7: no tradable gold symbol found");
+      Print("IDC_7: no tradable Gold/US30/Nasdaq symbol found");
       return(false);
      }
 
