@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.04"
+#property version   "1.05"
 #property strict
 #property description "IDC_7 — Gold/US30/Nasdaq M1 pending EA (MT4)"
 
@@ -118,6 +118,9 @@ bool   IsUs30SymbolName(const string sym);
 bool   IsNasdaqSymbolName(const string sym);
 bool   IsSupportedSymbolName(const string sym);
 bool   BindChartSupportedSymbol();
+double BrokerMinStopDistance();
+int    BrokerMinStopPoints();
+double NormalizeToTick(const double price);
 bool   InitTradeSymbol();
 void   RefreshSymbolMeta();
 string TradeSymbol();
@@ -319,6 +322,14 @@ int PriceToPoints(const double priceDelta)
 double NormalizeTradePrice(const double price)
   {
    return(NormalizeDouble(price, g_digits));
+  }
+
+double NormalizeToTick(const double price)
+  {
+   double tick = MarketInfo(TradeSymbol(), MODE_TICKSIZE);
+   if(tick <= 0.0)
+      return(NormalizeTradePrice(price));
+   return(NormalizeDouble(MathRound(price / tick) * tick, g_digits));
   }
 
 void RefreshSymbolMeta()
@@ -913,6 +924,13 @@ void ProcessTickSequence()
       g_seqMovePts = 0.0;
       g_dashReason = "PENDING_PLACED";
      }
+   else if(StringFind(g_dashReason, "ORDERSEND_ERR:") == 0)
+     {
+      // Invalid prices 등 발주 실패 시 매 틱 재시도 스팸 방지
+      g_tickDir    = TICK_NONE;
+      g_tickCount  = 0;
+      g_seqMovePts = 0.0;
+     }
   }
 
 bool IsStrongTrendBlocked(string &detail)
@@ -967,81 +985,108 @@ bool TryPlacePendingOrder()
 
 bool PlacePending(const int orderType, const double lots)
   {
-   RefreshRates();
-   double ask = TradeAsk();
-   double bid = TradeBid();
-   if(ask <= 0.0 || bid <= 0.0)
+   if(orderType != OP_BUYSTOP && orderType != OP_SELLSTOP)
       return(false);
 
-   double stopLevelPts = MarketInfo(TradeSymbol(), MODE_STOPLEVEL);
-   double freezePts    = MarketInfo(TradeSymbol(), MODE_FREEZELEVEL);
-   double minDistPts   = MathMax(stopLevelPts, freezePts);
-   int    pendPts      = InpPendingDistancePts;
-   if((double)pendPts < minDistPts)
-      pendPts = (int)MathCeil(minDistPts);
+   int minPts = BrokerMinStopPoints();
+   if(minPts < 1)
+      minPts = 1;
 
-   double entry = 0.0;
-   double sl    = 0.0;
-   double tp    = 0.0; // TP 사용 안 함
-
-   if(orderType == OP_BUYSTOP)
-     {
-      entry = NormalizeTradePrice(ask + PointsToPrice(pendPts));
-      sl    = NormalizeTradePrice(entry - PointsToPrice(InpStopLossPts));
-     }
-   else if(orderType == OP_SELLSTOP)
-     {
-      entry = NormalizeTradePrice(bid - PointsToPrice(pendPts));
-      sl    = NormalizeTradePrice(entry + PointsToPrice(InpStopLossPts));
-     }
-   else
-      return(false);
-
-   // 추가 안전: SL 거리 브로커 최소 충족
-   int slDistPts = PriceToPoints(entry - sl);
-   if(slDistPts < (int)minDistPts && minDistPts > 0)
-     {
-      if(orderType == OP_BUYSTOP)
-         sl = NormalizeTradePrice(entry - PointsToPrice((int)MathCeil(minDistPts)));
-      else
-         sl = NormalizeTradePrice(entry + PointsToPrice((int)MathCeil(minDistPts)));
-     }
+   int pendPts = (int)MathMax(InpPendingDistancePts, minPts + 1);
+   int slPts   = (int)MathMax(InpStopLossPts, minPts + 1);
 
    color clr = (orderType == OP_BUYSTOP) ? clrDodgerBlue : clrOrangeRed;
+   double tp = 0.0;
 
-   ResetLastError();
-   int ticket = OrderSend(TradeSymbol(), orderType, lots, entry, InpSlippagePts,
-                          sl, tp, InpTradeComment, InpMagicNumber, 0, clr);
-
-   if(ticket < 0)
+   for(int attempt = 0; attempt < 3; attempt++)
      {
+      RefreshRates();
+      double ask = TradeAsk();
+      double bid = TradeBid();
+      if(ask <= 0.0 || bid <= 0.0)
+         return(false);
+
+      double minDist = PointsToPrice(minPts);
+      double entry   = 0.0;
+      double sl      = 0.0;
+
+      if(orderType == OP_BUYSTOP)
+        {
+         double minEntry = ask + minDist;
+         entry = NormalizeToTick(ask + PointsToPrice(pendPts));
+         if(entry <= minEntry + g_point * 0.1)
+            entry = NormalizeToTick(minEntry + PointsToPrice(1));
+         sl = NormalizeToTick(entry - PointsToPrice(slPts));
+         if(sl >= entry - minDist + g_point * 0.1)
+            sl = NormalizeToTick(entry - minDist - PointsToPrice(1));
+         if(entry <= ask + g_point * 0.1)
+           {
+            Print("IDC_7: BuyStop entry invalid vs Ask | ask=", ask,
+                  " entry=", entry, " minPts=", minPts);
+            return(false);
+           }
+        }
+      else
+        {
+         double maxEntry = bid - minDist;
+         entry = NormalizeToTick(bid - PointsToPrice(pendPts));
+         if(entry >= maxEntry - g_point * 0.1)
+            entry = NormalizeToTick(maxEntry - PointsToPrice(1));
+         sl = NormalizeToTick(entry + PointsToPrice(slPts));
+         if(sl <= entry + minDist - g_point * 0.1)
+            sl = NormalizeToTick(entry + minDist + PointsToPrice(1));
+         if(entry >= bid - g_point * 0.1)
+           {
+            Print("IDC_7: SellStop entry invalid vs Bid | bid=", bid,
+                  " entry=", entry, " minPts=", minPts);
+            return(false);
+           }
+        }
+
+      ResetLastError();
+      int ticket = OrderSend(TradeSymbol(), orderType, lots, entry, InpSlippagePts,
+                             sl, tp, InpTradeComment, InpMagicNumber, 0, clr);
+
+      if(ticket > 0)
+        {
+         g_pendingTicket   = ticket;
+         g_pendingBarTime  = iTime(TradeSymbol(), PERIOD_M1, 0);
+         g_trailTicket     = -1;
+         g_trailStage1Done = false;
+
+         Print("IDC_7: pending placed ticket=", ticket,
+               " type=", (orderType == OP_BUYSTOP ? "BUYSTOP" : "SELLSTOP"),
+               " lots=", DoubleToString(lots, 2),
+               " entry=", DoubleToString(entry, g_digits),
+               " sl=", DoubleToString(sl, g_digits),
+               " tp=0",
+               " bid=", DoubleToString(bid, g_digits),
+               " ask=", DoubleToString(ask, g_digits),
+               " minStopPts=", minPts,
+               " pendPts=", pendPts,
+               " slPts=", slPts,
+               " m1Bar=", TimeToString(g_pendingBarTime, TIME_DATE|TIME_MINUTES));
+         return(true);
+        }
+
       int err = GetLastError();
-      Print("IDC_7: OrderSend pending failed type=", orderType,
+      Print("IDC_7: OrderSend pending failed attempt=", attempt + 1,
+            " type=", orderType,
             " lots=", DoubleToString(lots, 2),
+            " bid=", DoubleToString(bid, g_digits),
+            " ask=", DoubleToString(ask, g_digits),
             " entry=", DoubleToString(entry, g_digits),
             " sl=", DoubleToString(sl, g_digits),
+            " minStopPts=", minPts,
             " err=", err);
       g_dashReason = "ORDERSEND_ERR:" + IntegerToString(err);
-      return(false);
+      ResetLastError();
+
+      if(err != 129 && err != 130 && err != 131 && err != 138)
+         break;
      }
 
-   g_pendingTicket   = ticket;
-   g_pendingBarTime  = iTime(TradeSymbol(), PERIOD_M1, 0);
-   g_trailTicket     = -1;
-   g_trailStage1Done = false;
-
-   Print("IDC_7: pending placed ticket=", ticket,
-         " type=", (orderType == OP_BUYSTOP ? "BUYSTOP" : "SELLSTOP"),
-         " lots=", DoubleToString(lots, 2),
-         " entry=", DoubleToString(entry, g_digits),
-         " sl=", DoubleToString(sl, g_digits),
-         " tp=0",
-         " consec=", g_tickCount,
-         " movePts=", DoubleToString(g_seqMovePts, 1),
-         " pendPts=", pendPts,
-         " m1Bar=", TimeToString(g_pendingBarTime, TIME_DATE|TIME_MINUTES));
-
-   return(true);
+   return(false);
   }
 
 //====================================================================
