@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_7"
 #property link      ""
-#property version   "1.03"
+#property version   "1.04"
 #property strict
 #property description "IDC_7 — Gold/US30/Nasdaq M1 pending EA (MT4)"
 
@@ -117,6 +117,7 @@ bool   IsGoldSymbolName(const string sym);
 bool   IsUs30SymbolName(const string sym);
 bool   IsNasdaqSymbolName(const string sym);
 bool   IsSupportedSymbolName(const string sym);
+bool   BindChartSupportedSymbol();
 bool   InitTradeSymbol();
 void   RefreshSymbolMeta();
 string TradeSymbol();
@@ -347,6 +348,10 @@ bool IsUs30SymbolName(const string sym)
       return(true);
    if(StringFind(upper, "DJ30") == 0)
       return(true);
+   if(StringFind(upper, "US30.") == 0 || StringFind(upper, "DJ30.") == 0)
+      return(true);
+   if(StringFind(upper, "US30+") == 0 || StringFind(upper, "DJ30+") == 0)
+      return(true);
    if(StringFind(upper, "DOWJ") == 0)
       return(true);
    if(StringFind(upper, "WALLST") == 0)
@@ -367,6 +372,10 @@ bool IsNasdaqSymbolName(const string sym)
    if(StringFind(upper, "US100") == 0)
       return(true);
    if(StringFind(upper, "ND100") == 0)
+      return(true);
+   if(StringFind(upper, "NAS100.") == 0 || StringFind(upper, "USTEC.") == 0)
+      return(true);
+   if(StringFind(upper, "NAS100+") == 0 || StringFind(upper, "USTEC+") == 0)
       return(true);
    if(StringFind(upper, "NASDAQ") >= 0)
       return(true);
@@ -448,6 +457,35 @@ bool TrySetTradeSymbol(const string sym, string &best_sym, int &best_rank)
    return(true);
   }
 
+// 차트 심볼(DJ30.r 등)이 지원 종목이면 무조건 그 심볼에 고정 — 골드로 대체 금지
+bool BindChartSupportedSymbol()
+  {
+   string chartSym = Symbol();
+   if(!IsSupportedSymbolName(chartSym))
+      return(false);
+
+   SymbolSelect(chartSym, true);
+   RefreshRates();
+
+   double bid = MarketInfo(chartSym, MODE_BID);
+   double ask = MarketInfo(chartSym, MODE_ASK);
+   if(bid <= 0.0 || ask <= 0.0)
+     {
+      Print("IDC_7: chart symbol has no quotes: ", chartSym,
+            " (check Market Watch / session hours)");
+      return(false);
+     }
+
+   if(MarketInfo(chartSym, MODE_TRADEALLOWED) == 0)
+     {
+      Print("IDC_7: chart symbol trade disabled by broker: ", chartSym);
+      return(false);
+     }
+
+   g_tradeSymbol = chartSym;
+   return(true);
+  }
+
 bool DetectGoldSymbol()
   {
    string best_sym  = "";
@@ -461,14 +499,21 @@ bool DetectGoldSymbol()
          return(false);
         }
       g_tradeSymbol = best_sym;
+      Print("IDC_7: using manual symbol=", g_tradeSymbol, " chart=", Symbol());
       return(true);
      }
 
-   // 차트 심볼이 지원 종목이면 우선 고정 (US30/나스닥 차트에서 골드로 바뀌지 않음)
-   if(IsSymbolTradableGold(Symbol()))
+   // DJ30.r / US30 / USTEC 차트 → 패널·주문 모두 차트 심볼 (실패 시 골드 스캔 안 함)
+   if(BindChartSupportedSymbol())
      {
-      g_tradeSymbol = Symbol();
+      Print("IDC_7: bound to chart symbol=", g_tradeSymbol);
       return(true);
+     }
+
+   if(IsSupportedSymbolName(Symbol()))
+     {
+      Print("IDC_7: supported chart symbol but bind failed: ", Symbol());
+      return(false);
      }
 
    if(!InpAutoDetectGold)
@@ -477,6 +522,7 @@ bool DetectGoldSymbol()
       return(false);
      }
 
+   // 비지원 차트(EURUSD 등)에서만 마켓 스캔 fallback
    int total = SymbolsTotal(false);
    for(int i = 0; i < total; i++)
      {
@@ -493,6 +539,7 @@ bool DetectGoldSymbol()
      }
 
    g_tradeSymbol = best_sym;
+   Print("IDC_7: auto-scan selected symbol=", g_tradeSymbol, " chart=", Symbol());
    return(true);
   }
 
