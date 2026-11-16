@@ -20,7 +20,7 @@
 ## 1️⃣ 프로젝트 기본 정보
 - **EA 이름:** `IDC_M` (Session Flow Rider · 안 B)
 - **제작 시작일:** 2026-11-16
-- **전략 버전:** v1.0 (최초)
+- **전략 버전:** v1.10 (2차 검수 반영)
 - **플랫폼:** MetaTrader **4 전용** (`.mq4`)
 - **고정 규칙:**
   1. 원본 전략(안 B 세션 플로우)은 본 문서 §2에 고정·변경 불가
@@ -73,7 +73,9 @@
 | 한 봉 1진입 | `g_lastEntryBarTime` | ✅ |
 | 포지션 있으면 금지 | `IDC_CountOpen() > 0` | ✅ |
 | Lot 131/134 방지 | `IDC_NormalizeLots()` + `AccountFreeMarginCheck()` | ✅ |
-| 디버그 로그 ON/OFF | `InpDebugLog` | ✅ |
+| 디버그 로그 ON/OFF | `InpDebugLog` + `IDC_LogBarOX()` 매캔들 O/X | ✅ v1.10 |
+| Degrade Guard | `IDC_DegradeBlocksEntry()` | ✅ v1.10 |
+| 아시아 종료 후 레인지 확정 | `IDC_AsiaSessionComplete()` | ✅ v1.10 |
 | 심볼 US100 기본 | `InpTradeSymbol` 기본 `"US100"` | ✅ |
 
 ---

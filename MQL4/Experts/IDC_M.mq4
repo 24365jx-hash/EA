@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "IDC_M v1.0"
 #property link      ""
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 //--- LAYER 0: 원본 전략 B (Session Flow) — 변경 금지(헌법락)
@@ -69,7 +69,12 @@ input int      InpQualityFloorScore     = 40;          // 일말 완화 하한
 input int      InpLearnEveryNTrades     = 5;           // N거래마다 임계 미세조정
 
 //=== 기타 ==============================================================
-input bool     InpDebugLog              = false;       // 진입조건 디버그 로그
+input bool     InpDebugLog              = false;       // 매캔들 진입조건 O/X 로그
+
+//=== Degrade Guard (자가학습 Layer) ==================================
+input bool     InpDegradeOn             = true;        // 연속손실·기대값 악화 시 진입 중단
+input int      InpDegradeMaxConsecLoss  = 4;           // 연속 손실 허용
+input int      InpDegradePauseMinutes   = 120;         // 악화 시 신규진입 중단(분)
 
 //--- LAYER 1: Quality Engine (추가 — 원본 대체 없음)
 //--- LAYER 2: Guardian / Risk
@@ -85,6 +90,9 @@ double   g_initBalance = 0;
 int      g_tradesToday = 0;
 int      g_totalLearnTrades = 0;
 double   g_adaptThreshold = 0;
+int      g_consecLoss = 0;
+datetime g_degradePauseUntil = 0;
+bool     g_adaptActive = false;
 
 // 돌파 상태
 bool     g_breakUp = false;
@@ -110,24 +118,55 @@ int IDC_Period()
   }
 
 //+------------------------------------------------------------------+
+bool IDC_TrySymbol(const string name)
+  {
+   if(StringLen(name) < 1) return false;
+   if(MarketInfo(name, MODE_BID) <= 0) return false;
+   return true;
+  }
+
+string IDC_ResolveSymbol()
+  {
+   string list[];
+   int n = 0;
+   if(StringLen(InpTradeSymbol) > 0) { ArrayResize(list, n + 1); list[n++] = InpTradeSymbol; }
+   string chart = Symbol();
+   string cands[8];
+   cands[0]=chart; cands[1]="US100"; cands[2]="USTEC"; cands[3]="NAS100";
+   cands[4]="XAUUSD"; cands[5]="GOLD"; cands[6]="US30"; cands[7]="USTECH100";
+   for(int i = 0; i < 8; i++)
+     {
+      bool dup = false;
+      for(int j = 0; j < n; j++)
+         if(list[j] == cands[i]) { dup = true; break; }
+      if(!dup && StringLen(cands[i]) > 0)
+        { ArrayResize(list, n + 1); list[n++] = cands[i]; }
+     }
+   for(int k = 0; k < n; k++)
+      if(IDC_TrySymbol(list[k])) return list[k];
+   return chart;
+  }
+
 bool IDC_EnsureSymbol()
   {
-   if(StringLen(InpTradeSymbol) < 1)
-      g_sym = Symbol();
-   else
-      g_sym = InpTradeSymbol;
-   if(MarketInfo(g_sym, MODE_BID) <= 0)
-     {
-      if(MarketInfo(Symbol(), MODE_BID) > 0)
-         g_sym = Symbol();
-      else
-         return false;
-     }
+   g_sym = IDC_ResolveSymbol();
+   if(!IDC_TrySymbol(g_sym))
+      return false;
    g_point = MarketInfo(g_sym, MODE_POINT);
    g_digits = (int)MarketInfo(g_sym, MODE_DIGITS);
    if(g_point <= 0)
       return false;
    return true;
+  }
+
+bool IDC_AsiaSessionComplete()
+  {
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   int h = dt.hour;
+   if(InpAsiaStartHour < InpAsiaEndHour)
+      return (h >= InpAsiaEndHour);
+   return (h >= InpAsiaEndHour || h < InpAsiaStartHour);
   }
 
 //+------------------------------------------------------------------+
@@ -291,10 +330,23 @@ int IDC_CountOpen()
   }
 
 //+------------------------------------------------------------------+
+bool IDC_DegradeBlocksEntry()
+  {
+   if(!InpDegradeOn) return false;
+   if(TimeCurrent() < g_degradePauseUntil) return true;
+   if(g_consecLoss >= InpDegradeMaxConsecLoss)
+     {
+      g_degradePauseUntil = TimeCurrent() + InpDegradePauseMinutes * 60;
+      g_consecLoss = 0;
+      return true;
+     }
+   return false;
+  }
+
 int IDC_DynamicQualityThreshold()
   {
    double th = (double)InpQualityMinScore;
-   if(g_adaptThreshold > 0)
+   if(InpLearningOn && g_adaptActive)
       th = g_adaptThreshold;
    if(g_tradesToday >= InpMinTradesPerDay)
       return (int)MathRound(th);
@@ -349,13 +401,22 @@ void IDC_LearnOnClose(const double profitMoney, const int qualityAtEntry)
       FileWrite(handle, TimeToString(TimeCurrent()), profitMoney, qualityAtEntry);
       FileClose(handle);
      }
+   if(profitMoney < 0)
+     {
+      g_consecLoss++;
+      if(g_consecLoss >= InpDegradeMaxConsecLoss && InpDegradeOn)
+         g_degradePauseUntil = TimeCurrent() + InpDegradePauseMinutes * 60;
+     }
+   else if(profitMoney > 0)
+      g_consecLoss = 0;
+
+   if(!InpLearningOn) return;
    if(g_totalLearnTrades % InpLearnEveryNTrades == 0)
      {
-      if(profitMoney < 0 && g_adaptThreshold <= 0)
-         g_adaptThreshold = InpQualityMinScore + 2;
-      else if(profitMoney < 0)
-         g_adaptThreshold = MathMin(85, g_adaptThreshold + 1);
-      else if(profitMoney > 0 && g_adaptThreshold > 0)
+      g_adaptActive = true;
+      if(profitMoney < 0)
+         g_adaptThreshold = MathMin(85, g_adaptThreshold + 1.0);
+      else if(profitMoney > 0)
          g_adaptThreshold = MathMax((double)InpQualityFloorScore, g_adaptThreshold - 0.5);
      }
   }
@@ -395,7 +456,7 @@ bool IDC_MarginOk(const int cmd, double lots, const double price)
    while(lots >= MarketInfo(g_sym, MODE_MINLOT))
      {
       double chk = AccountFreeMarginCheck(g_sym, cmd, lots, price);
-      if(chk > 0)
+      if(chk >= 0)
          return true;
       double step = MarketInfo(g_sym, MODE_LOTSTEP);
       lots -= step;
@@ -535,11 +596,28 @@ bool IDC_IsNewSignalBar()
   }
 
 //+------------------------------------------------------------------+
-void IDC_DebugState(const string tag, const bool wantBuy, const int q, const int qNeed)
+string IDC_OX(const bool ok) { return ok ? "O" : "X"; }
+
+void IDC_LogBarOX(const int qBuy, const int qSell, const int qNeed,
+                  const bool oRng, const bool oAsia, const bool oSes, const bool oGdn,
+                  const bool oDD, const bool oPos, const bool oDeg,
+                  const bool oH1B, const bool oH1S, const bool oBrkB, const bool oBrkS,
+                  const bool oPbB, const bool oPbS, const bool oEntB, const bool oEntS,
+                  const string gdnWhy)
   {
    if(!InpDebugLog) return;
-   PrintFormat("[IDC_M][%s] sym=%s spread=%d range=%d brkUp=%d brkDn=%d Q=%d need=%d wantBuy=%d",
-               tag, g_sym, (int)IDC_SpreadPts(), g_rangeValid, g_breakUp, g_breakDn, q, qNeed, wantBuy);
+   int p = IDC_Period();
+   string tbar = TimeToString(iTime(g_sym, p, 1), TIME_DATE | TIME_MINUTES);
+   PrintFormat("[IDC_M][BAR-OX] bar=%s sym=%s spr=%d | RNG:%s ASIA_DONE:%s SES:%s GDN:%s DD:%s POS:%s DEG:%s",
+               tbar, g_sym, (int)IDC_SpreadPts(),
+               IDC_OX(oRng), IDC_OX(oAsia), IDC_OX(oSes), IDC_OX(oGdn), IDC_OX(oDD),
+               IDC_OX(oPos), IDC_OX(oDeg));
+   PrintFormat("[IDC_M][BAR-OX] BUY  H1:%s BRK:%s PB:%s Q%d>=%d:%s ENT:%s",
+               IDC_OX(oH1B), IDC_OX(oBrkB), IDC_OX(oPbB), qBuy, qNeed,
+               IDC_OX(qBuy >= qNeed), IDC_OX(oEntB));
+   PrintFormat("[IDC_M][BAR-OX] SELL H1:%s BRK:%s PB:%s Q%d>=%d:%s ENT:%s | gdnWhy=%s",
+               IDC_OX(oH1S), IDC_OX(oBrkS), IDC_OX(oPbS), qSell, qNeed,
+               IDC_OX(qSell >= qNeed), IDC_OX(oEntS), gdnWhy);
   }
 
 //+------------------------------------------------------------------+
@@ -553,7 +631,8 @@ bool IDC_OpenTrade(const bool buy, const int quality)
    string why = "";
    if(!IDC_GuardianAllowEntry(why))
      {
-      IDC_DebugState("block_"+why, buy, quality, 0);
+      if(InpDebugLog)
+         Print("[IDC_M] open blocked guardian=", why);
       return false;
      }
 
@@ -653,50 +732,72 @@ void IDC_ManageTrailing()
 //+------------------------------------------------------------------+
 void IDC_CheckClosedTrades()
   {
-   static int known = -1;
-   int hist = OrdersHistoryTotal();
-   if(known < 0) { known = hist; return; }
-   for(int i = known; i < hist; i++)
+   static datetime lastClose = 0;
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
      {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
       if(OrderMagicNumber() != InpMagic || OrderSymbol() != g_sym) continue;
+      if(OrderType() != OP_BUY && OrderType() != OP_SELL) continue;
+      datetime ct = OrderCloseTime();
+      if(ct <= lastClose) break;
+      if(ct <= 0) continue;
       int ticket = OrderTicket();
       double q = 0;
       if(GlobalVariableCheck("IDC_M_q_"+IntegerToString(ticket)))
          q = GlobalVariableGet("IDC_M_q_"+IntegerToString(ticket));
-      IDC_LearnOnClose(OrderProfit() + OrderSwap() + OrderCommission(), (int)q);
+      double pl = OrderProfit() + OrderSwap() + OrderCommission();
+      IDC_LearnOnClose(pl, (int)q);
       GlobalVariableDel("IDC_M_q_"+IntegerToString(ticket));
+      if(ct > lastClose) lastClose = ct;
      }
-   known = hist;
   }
 
 //+------------------------------------------------------------------+
 void IDC_OnSignalBar()
   {
    IDC_CalcAsiaRange();
-   if(IDC_CountOpen() > 0) return;
+
+   bool oRng = g_rangeValid;
+   bool oAsia = IDC_AsiaSessionComplete();
+   bool oSes = IDC_TradeSessionOk();
+   string gwhy = "";
+   bool oGdn = IDC_GuardianAllowEntry(gwhy);
+   bool oDD = (IDC_DailyLossPct() < InpDailyLossLimitPct &&
+               IDC_TotalDDPct() < InpTotalDDLimitPct);
+   bool oPos = (IDC_CountOpen() == 0);
+   bool oDeg = !IDC_DegradeBlocksEntry();
+
+   bool oH1B = IDC_H1TrendOk(true);
+   bool oH1S = IDC_H1TrendOk(false);
+   bool oBrkB = oRng && oAsia && IDC_CheckBreakout(true);
+   bool oBrkS = oRng && oAsia && IDC_CheckBreakout(false);
+   bool oPbB = oBrkB && IDC_CheckPullback(true);
+   bool oPbS = oBrkS && IDC_CheckPullback(false);
+
+   int p = IDC_Period();
+   double close1 = iClose(g_sym, p, 1);
+   int qBuy = 0, qSell = 0;
+   if(oRng && close1 > 0)
+     {
+      double brkB = (close1 - g_asiaHigh) / g_point;
+      double brkS = (g_asiaLow - close1) / g_point;
+      qBuy = IDC_QualityScore(true, brkB);
+      qSell = IDC_QualityScore(false, brkS);
+     }
 
    int qNeed = IDC_DynamicQualityThreshold();
+   bool coreB = oRng && oAsia && oSes && oGdn && oDD && oPos && oDeg && oH1B && oBrkB && oPbB && (qBuy >= qNeed);
+   bool coreS = oRng && oAsia && oSes && oGdn && oDD && oPos && oDeg && oH1S && oBrkS && oPbS && (qSell >= qNeed);
 
-   bool tryBuy  = g_rangeValid && IDC_H1TrendOk(true)  && IDC_CheckBreakout(true)  && IDC_CheckPullback(true);
-   bool trySell = g_rangeValid && IDC_H1TrendOk(false) && IDC_CheckBreakout(false) && IDC_CheckPullback(false);
+   bool oEntB = false;
+   bool oEntS = false;
+   if(coreB && (!coreS || qBuy >= qSell))
+      oEntB = IDC_OpenTrade(true, qBuy);
+   else if(coreS)
+      oEntS = IDC_OpenTrade(false, qSell);
 
-   if(tryBuy)
-     {
-      double close1 = iClose(g_sym, IDC_Period(), 1);
-      double brk = (close1 - g_asiaHigh) / g_point;
-      int q = IDC_QualityScore(true, brk);
-      IDC_DebugState("eval_buy", true, q, qNeed);
-      if(q >= qNeed) IDC_OpenTrade(true, q);
-     }
-   if(trySell)
-     {
-      double close1 = iClose(g_sym, IDC_Period(), 1);
-      double brk = (g_asiaLow - close1) / g_point;
-      int q = IDC_QualityScore(false, brk);
-      IDC_DebugState("eval_sell", false, q, qNeed);
-      if(q >= qNeed) IDC_OpenTrade(false, q);
-     }
+   IDC_LogBarOX(qBuy, qSell, qNeed, oRng, oAsia, oSes, oGdn, oDD, oPos, oDeg,
+                oH1B, oH1S, oBrkB, oBrkS, oPbB, oPbS, oEntB, oEntS, gwhy);
   }
 
 //+------------------------------------------------------------------+
@@ -709,8 +810,9 @@ int OnInit()
      }
    g_initBalance = AccountBalance();
    g_adaptThreshold = InpQualityMinScore;
+   g_adaptActive = false;
    IDC_ResetDayStats();
-   PrintFormat("[IDC_M] init sym=%s point=%.10f digits=%d server=%s (교육용 포맷 v1.0)",
+   PrintFormat("[IDC_M] v1.10 init sym=%s point=%.10f digits=%d server=%s | 매캔들 O/X:InpDebugLog",
                g_sym, g_point, g_digits, TimeToString(TimeCurrent()));
    return INIT_SUCCEEDED;
   }
@@ -728,17 +830,6 @@ void OnTick()
    IDC_ResetDayStats();
    IDC_CheckClosedTrades();
    IDC_ManageTrailing();
-
-   if(InpDebugLog && !IDC_IsNewSignalBar())
-     {
-      // 틱마다 경량 상태 (새 바에서 상세 eval)
-      static datetime lastDbg = 0;
-      if(TimeCurrent() - lastDbg >= 5)
-        {
-         lastDbg = TimeCurrent();
-         IDC_DebugState("tick", false, 0, IDC_DynamicQualityThreshold());
-        }
-     }
 
    if(IDC_IsNewSignalBar())
       IDC_OnSignalBar();
