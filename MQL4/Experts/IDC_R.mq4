@@ -1273,7 +1273,7 @@ int SplitComma(string line, string &out[])
    int i;
    string cur;
    string ch;
-   ArrayResize(out, 24);
+   ArrayResize(out, 128);
    n = 0;
    cur = "";
    for(i = 0; i < StringLen(line); i++)
@@ -1281,22 +1281,23 @@ int SplitComma(string line, string &out[])
       ch = StringSubstr(line, i, 1);
       if(ch == ",")
       {
-         if(n < 24) { out[n] = cur; n++; }
+         if(n < 128) { out[n] = cur; n++; }
          cur = "";
       }
       else cur = cur + ch;
    }
-   if(n < 24) { out[n] = cur; n++; }
+   if(n < 128) { out[n] = cur; n++; }
    return(n);
 }
 
 void SaveLearn()
 {
    int h;
+   int i;
    string line;
    h = FileOpen("IDC_R_learn.txt", FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE) return;
-   line = "v1," + IntegerToString(gClosed) + "," +
+   line = "v2," + IntegerToString(gClosed) + "," +
           DoubleToString(gW[0], 6) + "," + DoubleToString(gW[1], 6) + "," +
           DoubleToString(gW[2], 6) + "," + DoubleToString(gW[3], 6) + "," +
           DoubleToString(gPR[0], 4) + "," + IntegerToString(gPN[0]) + "," +
@@ -1305,7 +1306,10 @@ void SaveLearn()
           IntegerToString(gPercentile) + "," + DoubleToString(gInitBal, 2) + "," +
           IntegerToString(gDayKey) + "," + IntegerToString(gTradesToday) + "," +
           IntegerToString(gModifiesToday) + "," + IntegerToString(gEntrySeq) + "," +
-          IntegerToString(gDayLocked ? 1 : 0);
+          IntegerToString(gDayLocked ? 1 : 0) + "," + DoubleToString(gDayStartBal, 2) + "," +
+          IntegerToString(gScoreN);
+   for(i = 0; i < gScoreN; i++)
+      line = line + "," + DoubleToString(gScore[i], 6);
    FileWriteString(h, line + "\n");
    FileClose(h);
 }
@@ -1369,6 +1373,8 @@ void LoadLearn()
 {
    int h;
    int n;
+   int i;
+   int sn;
    double ib;
    string line;
    string p[];
@@ -1380,13 +1386,15 @@ void LoadLearn()
    ClampPercentile();
    gEntrySeq = 0;
    gDayLocked = false;
+   gScoreN = 0;
+   gDayStartBal = 0.0;
    h = FileOpen("IDC_R_learn.txt", FILE_READ | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE) return;
    if(!FileIsEnding(h))
    {
       line = StripCr(FileReadString(h));
       n = SplitComma(line, p);
-      if(n >= 18 && p[0] == "v1")
+      if(n >= 18 && (p[0] == "v1" || p[0] == "v2"))
       {
          gClosed = (int)StringToInteger(p[1]);
          gW[0] = StringToDouble(p[2]);
@@ -1407,6 +1415,24 @@ void LoadLearn()
          gModifiesToday = (int)StringToInteger(p[16]);
          gEntrySeq = (int)StringToInteger(p[17]);
          if(n >= 19 && StringToInteger(p[18]) != 0) gDayLocked = true;
+         if(p[0] == "v2" && n >= 20)
+         {
+            gDayStartBal = StringToDouble(p[19]);
+            if(gDayStartBal < 0.0) gDayStartBal = 0.0;
+         }
+         if(p[0] == "v2" && n >= 21)
+         {
+            sn = (int)StringToInteger(p[20]);
+            if(sn < 0) sn = 0;
+            if(sn > MAXSCORE) sn = MAXSCORE;
+            gScoreN = 0;
+            for(i = 0; i < sn; i++)
+            {
+               if(21 + i >= n) break;
+               gScore[gScoreN] = StringToDouble(p[21 + i]);
+               gScoreN++;
+            }
+         }
       }
    }
    FileClose(h);
@@ -1676,6 +1702,7 @@ bool TryEntry(string sym, int slot)
    {
       FlushOx(sym, "진입X 점수 " + DoubleToString(score[pick], 2));
       for(s = 0; s < n; s++) PushScore(score[s]);
+      SaveLearn();
       return(false);
    }
    for(s = 0; s < n; s++) PushScore(score[s]);
@@ -1980,6 +2007,7 @@ void CatchUpDay()
       gModifiesToday = 0;
       gDayLocked = false;
       gDayKey = today;
+      gDayStartBal = AccountBalance();
       SaveLearn();
    }
    else
@@ -1987,8 +2015,8 @@ void CatchUpDay()
       counted = CountEntriesOnDay(today);
       if(counted > gTradesToday) gTradesToday = counted;
       if(gDayKey == 0) gDayKey = today;
+      if(gDayStartBal <= 0.0) gDayStartBal = AccountBalance();
    }
-   gDayStartBal = AccountBalance();
    gHaveDay = true;
 }
 
