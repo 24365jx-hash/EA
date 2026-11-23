@@ -51,7 +51,7 @@ input int    InpMaxModifies        = 800;          // 하루 손절 수정 상�
 input int    InpMaxTickGap         = 30;           // 틱 공백 초
 input double InpSpreadMedianMult   = 2.5;          // 스프레드 / 중앙값 상한
 input double InpSpreadVsSl         = 0.25;         // 스프레드 / 손절거리 상한
-input bool   InpDebugLog           = false;        // 진입 디버그 로그
+input bool   InpDebugLog           = false;        // 진입 디버그 O/X (매 신호봉)
 input bool   InpUseGold            = true;         // 마켓워치 골드 추가
 input bool   InpUseIndex           = true;         // 마켓워치 지수 추가
 input bool   InpUseFX              = false;        // 마켓워치 FX 추가
@@ -108,14 +108,21 @@ datetime gLastSymRefresh = 0;
 bool     gHistWarned = false;
 bool     gDayLocked = false;
 datetime gLastOpenSave = 0;
+string   gOxLine[8];
+int      gOxN = 0;
+string   gGateLine = "";
+string   gBlock = "";
+bool     gOxSent = false;
 
 int LockPoints(int start, int step, int stand, int profitPts)
 {
+   int n;
+   int lock;
    if(step < 1) step = 1;
    if(stand < 1) stand = step;
    if(profitPts < start) return(-1);
-   int n = (profitPts - start) / step;
-   int lock = start + n * step - stand;
+   n = (profitPts - start) / step;
+   lock = start + n * step - stand;
    if(lock < 0) lock = 0;
    return(lock);
 }
@@ -349,6 +356,55 @@ void DLog(string sym, string msg)
 {
    if(!InpDebugLog) return;
    Print("IDC_R chartTF=", IntegerToString(Period()), " signalTF=", IntegerToString(InpSignalTF), " ", sym, " ", msg);
+}
+
+void OxLine(string s)
+{
+   if(!InpDebugLog) return;
+   if(gOxN >= 8) return;
+   gOxLine[gOxN] = s;
+   gOxN++;
+}
+
+string Yn(bool v)
+{
+   if(v) return("O");
+   return("X");
+}
+
+string StepMark(int reached, int at)
+{
+   if(reached > at) return("O");
+   if(reached == at) return("X");
+   return("-");
+}
+
+string LevelOx(string name, int reached)
+{
+   return(name
+      + " 스윕" + StepMark(reached, 0)
+      + " 복귀" + StepMark(reached, 1)
+      + " 첫복귀" + StepMark(reached, 2)
+      + " H1" + StepMark(reached, 3)
+      + " 품질" + StepMark(reached, 4)
+      + " 추격" + StepMark(reached, 5)
+      + " 손절" + StepMark(reached, 6)
+      + " 스프레드상한" + StepMark(reached, 7)
+      + " 손절대비" + StepMark(reached, 8)
+      + " 후보" + StepMark(reached, 9));
+}
+
+void FlushOx(string sym, string verdict)
+{
+   int i;
+   datetime closed;
+   if(!InpDebugLog || gOxSent) return;
+   gOxSent = true;
+   closed = iTime(sym, InpSignalTF, 1);
+   Print("IDC_R ", sym, " ", TfNote(), " closed=", TimeToString(closed, TIME_DATE | TIME_MINUTES));
+   Print(gGateLine);
+   for(i = 0; i < gOxN; i++) Print(gOxLine[i]);
+   Print("=> ", verdict);
 }
 
 string TfNote()
@@ -805,6 +861,7 @@ int CollectSignals(string sym,
    int dirs[4];
    int emaP;
    int riskPts;
+   int reached;
    string tags[4];
    bool dup;
    bool pierced;
@@ -819,9 +876,11 @@ int CollectSignals(string sym,
    lc = 0;
    if(AsiaWindow(aHi, aLo, sym))
    {
+      OxLine("아시아고저 O");
       levels[lc] = aLo; dirs[lc] = 1; tags[lc] = "ASIAL"; lc++;
       levels[lc] = aHi; dirs[lc] = -1; tags[lc] = "ASIAH"; lc++;
    }
+   else OxLine("아시아고저 X");
    pdl = iLow(sym, PERIOD_D1, 1);
    pdh = iHigh(sym, PERIOD_D1, 1);
    if(pdl > 0.0 && lc < 4) { levels[lc] = pdl; dirs[lc] = 1; tags[lc] = "PDL"; lc++; }
@@ -838,7 +897,7 @@ int CollectSignals(string sym,
       {
          if(dir[q] == d && MathAbs(level[q] - lv) <= 2.0 * point) dup = true;
       }
-      if(dup) continue;
+      if(dup) { OxLine(tags[L] + " 중복X"); continue; }
       sweepBar = -1;
       for(b = 1; b <= maxB; b++)
       {
@@ -850,7 +909,7 @@ int CollectSignals(string sym,
          if(d < 0 && high >= lv + sweep * point) pierced = true;
          if(pierced) { sweepBar = b; break; }
       }
-      if(sweepBar < 1) { DLog(sym, tags[L] + " no sweep"); continue; }
+      if(sweepBar < 1) { OxLine(LevelOx(tags[L], 0)); continue; }
       ext = 0.0;
       for(b = 1; b <= sweepBar; b++)
       {
@@ -866,13 +925,13 @@ int CollectSignals(string sym,
             if(high > ext) ext = high;
          }
       }
-      if(ext <= 0.0) continue;
+      if(ext <= 0.0) { OxLine(LevelOx(tags[L], 0)); continue; }
       closePx = iClose(sym, InpSignalTF, 1);
       hi1 = iHigh(sym, InpSignalTF, 1);
       lo1 = iLow(sym, InpSignalTF, 1);
-      if(closePx <= 0.0) continue;
-      if(d > 0 && closePx <= lv) { DLog(sym, tags[L] + " no reclaim"); continue; }
-      if(d < 0 && closePx >= lv) { DLog(sym, tags[L] + " no reclaim"); continue; }
+      if(closePx <= 0.0) { OxLine(LevelOx(tags[L], 1)); continue; }
+      if(d > 0 && closePx <= lv) { OxLine(LevelOx(tags[L], 1)); continue; }
+      if(d < 0 && closePx >= lv) { OxLine(LevelOx(tags[L], 1)); continue; }
       reclaimedEarlier = false;
       for(b = 2; b < sweepBar; b++)
       {
@@ -881,29 +940,30 @@ int CollectSignals(string sym,
          if(d > 0 && cprev > lv) reclaimedEarlier = true;
          if(d < 0 && cprev < lv) reclaimedEarlier = true;
       }
-      if(reclaimedEarlier) { DLog(sym, tags[L] + " already reclaimed"); continue; }
-      if(!H1Ok(sym, d)) { DLog(sym, tags[L] + " H1 block"); continue; }
+      if(reclaimedEarlier) { OxLine(LevelOx(tags[L], 2)); continue; }
+      if(!H1Ok(sym, d)) { OxLine(LevelOx(tags[L], 3)); continue; }
       atr = iATR(sym, InpSignalTF, InpAtrPeriod, 1);
       range = hi1 - lo1;
       if(range < 0.0) range = 0.0;
       reclaimPts = (d > 0) ? (closePx - lv) / point : (lv - closePx) / point;
       quality = (atr > 0.0 && range >= InpReclaimAtr * atr) || (reclaimPts >= reclaimMin);
-      if(!quality) { DLog(sym, tags[L] + " weak reclaim"); continue; }
+      if(!quality) { OxLine(LevelOx(tags[L], 4)); continue; }
       px = (d > 0) ? MarketInfo(sym, MODE_ASK) : MarketInfo(sym, MODE_BID);
-      if(px <= 0.0) continue;
-      if(d > 0 && px > closePx + chase * point) { DLog(sym, tags[L] + " chase"); continue; }
-      if(d < 0 && px < closePx - chase * point) { DLog(sym, tags[L] + " chase"); continue; }
+      if(px <= 0.0) { OxLine(LevelOx(tags[L], 5)); continue; }
+      if(d > 0 && px > closePx + chase * point) { OxLine(LevelOx(tags[L], 5)); continue; }
+      if(d < 0 && px < closePx - chase * point) { OxLine(LevelOx(tags[L], 5)); continue; }
       slp = (d > 0) ? ext - buf * point : ext + buf * point;
       digits = (int)MarketInfo(sym, MODE_DIGITS);
       slp = NormalizeDouble(slp, digits);
-      if(!SlAccept(sym, d, px, slp, slmin, slmax)) { DLog(sym, tags[L] + " sl reject"); continue; }
+      if(!SlAccept(sym, d, px, slp, slmin, slmax)) { OxLine(LevelOx(tags[L], 6)); continue; }
       spr = (int)MarketInfo(sym, MODE_SPREAD);
-      if(spCap > 0 && spr > spCap) { DLog(sym, tags[L] + " spread cap"); continue; }
+      if(spCap > 0 && spr > spCap) { OxLine(LevelOx(tags[L], 7)); continue; }
       if(InpSpreadVsSl > 0.0)
       {
          riskPts = (int)MathRound(MathAbs(px - slp) / point);
-         if(riskPts > 0 && spr > riskPts * InpSpreadVsSl) { DLog(sym, tags[L] + " spread vs sl"); continue; }
+         if(riskPts > 0 && spr > riskPts * InpSpreadVsSl) { OxLine(LevelOx(tags[L], 8)); continue; }
       }
+      reached = 10;
       depPts = (d > 0) ? (lv - ext) / point : (ext - lv) / point;
       ff[0] = Clamp01(depPts / (sweep * 3.0));
       ff[1] = Clamp01(reclaimPts / (sweep * 2.0));
@@ -925,6 +985,7 @@ int CollectSignals(string sym,
       feat[n][3] = ff[3];
       score[n] = ScoreOf(ff);
       tag[n] = tags[L];
+      OxLine(LevelOx(tags[L], reached));
       n++;
    }
    return(n);
@@ -1022,7 +1083,7 @@ bool SpreadOkMedian(int slot, string sym)
    return(true);
 }
 
-bool CanEnter(string sym, int slot)
+bool MarkBar(string sym, int slot)
 {
    datetime bar;
    int need;
@@ -1033,17 +1094,53 @@ bool CanEnter(string sym, int slot)
    if(need < 30) need = 30;
    if(iBars(sym, InpSignalTF) < need) return(false);
    gBarOf[slot] = bar;
-   if(MarketInfo(sym, MODE_TRADEALLOWED) <= 0.0) { DLog(sym, "trade disabled"); return(false); }
-   if(!IsTesting() && !IsTradeAllowed()) { DLog(sym, "autotrading off"); return(false); }
-   if(ClassOf(sym) == 0 && !OverridesComplete()) { DLog(sym, "unknown symbol"); return(false); }
-   if(!QuoteFresh(sym)) { DLog(sym, "stale quote"); return(false); }
-   if(!SpreadOkMedian(slot, sym)) { DLog(sym, "spread median"); return(false); }
-   if(!InSession()) { DLog(sym, "outside session " + TfNote()); return(false); }
-   if(AsiaBlocked()) { DLog(sym, "asia measure window"); return(false); }
-   if(BlockHour()) { DLog(sym, "server block hour"); return(false); }
-   if(!RiskAllowsEntry()) { DLog(sym, "risk block"); return(false); }
-   if(HasOurPosition(sym)) { DLog(sym, "position exists"); return(false); }
    return(true);
+}
+
+bool CanEnter(string sym, int slot)
+{
+   bool tradeOk;
+   bool autoOk;
+   bool known;
+   bool fresh;
+   bool medOk;
+   bool sess;
+   bool asiaOk;
+   bool hourOk;
+   bool riskOk;
+   bool flat;
+   tradeOk = (MarketInfo(sym, MODE_TRADEALLOWED) > 0.0);
+   autoOk = (IsTesting() || IsTradeAllowed());
+   known = (ClassOf(sym) != 0 || OverridesComplete());
+   fresh = QuoteFresh(sym);
+   medOk = SpreadOkMedian(slot, sym);
+   sess = InSession();
+   asiaOk = !AsiaBlocked();
+   hourOk = !BlockHour();
+   riskOk = RiskAllowsEntry();
+   flat = !HasOurPosition(sym);
+   gGateLine = "세션" + Yn(sess)
+      + " 아시아외" + Yn(asiaOk)
+      + " 서버시간" + Yn(hourOk)
+      + " 손실한도" + Yn(riskOk)
+      + " 포지션없음" + Yn(flat)
+      + " 시세" + Yn(fresh)
+      + " 중앙스프레드" + Yn(medOk)
+      + " 종목거래" + Yn(tradeOk)
+      + " 자동매매" + Yn(autoOk)
+      + " 심볼등급" + Yn(known);
+   gBlock = "";
+   if(!tradeOk) gBlock = "종목거래";
+   else if(!autoOk) gBlock = "자동매매";
+   else if(!known) gBlock = "심볼등급";
+   else if(!fresh) gBlock = "시세";
+   else if(!medOk) gBlock = "중앙스프레드";
+   else if(!sess) gBlock = "세션";
+   else if(!asiaOk) gBlock = "아시아외";
+   else if(!hourOk) gBlock = "서버시간";
+   else if(!riskOk) gBlock = "손실한도";
+   else if(!flat) gBlock = "포지션없음";
+   return(gBlock == "");
 }
 
 int PickPreset()
@@ -1535,10 +1632,37 @@ bool TryEntry(string sym, int slot)
    double lot;
    double realRisk;
    double openPx;
+   bool known;
+   bool gates;
    if(!gSelfOK) return(false);
-   if(!CanEnter(sym, slot)) return(false);
-   n = CollectSignals(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag);
-   if(n <= 0) { DLog(sym, "no signal " + TfNote()); return(false); }
+   if(!MarkBar(sym, slot)) return(false);
+   gOxN = 0;
+   gOxSent = false;
+   gGateLine = "";
+   gBlock = "";
+   known = (ClassOf(sym) != 0 || OverridesComplete());
+   n = 0;
+   if(!InpDebugLog)
+   {
+      if(!CanEnter(sym, slot)) return(false);
+      n = CollectSignals(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag);
+      if(n <= 0) return(false);
+   }
+   else
+   {
+      if(known) n = CollectSignals(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag);
+      gates = CanEnter(sym, slot);
+      if(!gates)
+      {
+         FlushOx(sym, "진입X " + gBlock);
+         return(false);
+      }
+      if(n <= 0)
+      {
+         FlushOx(sym, "진입X 신호없음");
+         return(false);
+      }
+   }
    pick = 0;
    if(gClosed < WarmCount())
    {
@@ -1550,7 +1674,7 @@ bool TryEntry(string sym, int slot)
    }
    if(!GateScore(score[pick]))
    {
-      DLog(sym, "score " + DoubleToString(score[pick], 3) + " cut");
+      FlushOx(sym, "진입X 점수 " + DoubleToString(score[pick], 2));
       for(s = 0; s < n; s++) PushScore(score[s]);
       return(false);
    }
@@ -1565,9 +1689,9 @@ bool TryEntry(string sym, int slot)
    px = (cmd == OP_BUY) ? MarketInfo(sym, MODE_ASK) : MarketInfo(sym, MODE_BID);
    point = MarketInfo(sym, MODE_POINT);
    mpp = MoneyPerPoint(sym);
-   if(mpp <= 0.0 || point <= 0.0 || px <= 0.0) return(false);
+   if(mpp <= 0.0 || point <= 0.0 || px <= 0.0) { FlushOx(sym, "진입X 시세가치"); return(false); }
    dist = (int)MathRound(MathAbs(px - sl[pick]) / point);
-   if(dist <= 0) return(false);
+   if(dist <= 0) { FlushOx(sym, "진입X 손절거리"); return(false); }
    riskPct = InpRiskPercent;
    if(gClosed >= WarmCount())
    {
@@ -1579,7 +1703,7 @@ bool TryEntry(string sym, int slot)
    riskMoney = 0.0;
    if(InpLotMode == LOT_PERCENT)
    {
-      if(riskPct <= 0.0) return(false);
+      if(riskPct <= 0.0) { FlushOx(sym, "진입X 위험비율"); return(false); }
       riskMoney = AccountBalance() * riskPct / 100.0;
       want = riskMoney / (dist * mpp);
    }
@@ -1587,10 +1711,10 @@ bool TryEntry(string sym, int slot)
    {
       riskMoney = InpFixedLot * dist * mpp;
    }
-   if(!FitLot(sym, cmd, want, lot)) return(false);
-   if(HasOurPosition(sym)) return(false);
+   if(!FitLot(sym, cmd, want, lot)) { FlushOx(sym, "진입X 랏"); return(false); }
+   if(HasOurPosition(sym)) { FlushOx(sym, "진입X 포지션없음"); return(false); }
    ticket = SendMarket(sym, dir[pick], lot, sl[pick], clsPx[pick], chase, slmin, slmax);
-   if(ticket <= 0) return(false);
+   if(ticket <= 0) { FlushOx(sym, "진입X 주문"); return(false); }
    gTradesToday++;
    gEntrySeq++;
    realRisk = riskMoney;
@@ -1602,7 +1726,7 @@ bool TryEntry(string sym, int slot)
    }
    AddOpen(ticket, ff, preset, realRisk, extreme[pick]);
    Print("IDC_R entry ", sym, " ", tag[pick], " lot=", DoubleToString(lot, 4), " ", TfNote());
-   DLog(sym, "ENTER " + tag[pick] + " score=" + DoubleToString(score[pick], 3) + " preset=" + IntegerToString(preset));
+   FlushOx(sym, "진입O " + tag[pick] + " 점수" + DoubleToString(score[pick], 2));
    SaveLearn();
    return(true);
 }
