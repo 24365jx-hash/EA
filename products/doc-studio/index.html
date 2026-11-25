@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>문서함</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="app-header no-print">
+    <div>
+      <h1>문서함</h1>
+      <p>견적서, 거래명세서, 영수증, 작업 단가, 월간 장부. 입력은 이 브라우저에만 저장됩니다.</p>
+    </div>
+  </header>
+  <nav class="tabs no-print" aria-label="기능">
+    <button type="button" id="tab-doc" aria-selected="true">문서</button>
+    <button type="button" id="tab-quote" aria-selected="false">작업 단가</button>
+    <button type="button" id="tab-ledger" aria-selected="false">월간 장부</button>
+  </nav>
+
+  <section id="view-doc" class="view active">
+    <div class="editor no-print">
+      <p class="save-warning" id="save-warning" hidden>이 브라우저는 저장을 막았습니다. 작업 끝에 백업 받기를 누르세요.</p>
+      <fieldset>
+        <legend>문서</legend>
+        <div class="choice-row" id="doc-types">
+          <label><input type="radio" name="docType" value="quote" checked> 견적서</label>
+          <label><input type="radio" name="docType" value="statement"> 거래명세서</label>
+          <label><input type="radio" name="docType" value="receipt"> 영수증</label>
+        </div>
+        <div class="grid-2" style="margin-top:8px">
+          <label class="field">작성일
+            <input id="doc-date" type="date" autocomplete="off">
+          </label>
+          <label class="field">문서번호
+            <input id="doc-number" type="text" autocomplete="off">
+          </label>
+        </div>
+        <div class="grid-2" style="margin-top:8px">
+          <label class="field" id="valid-row">유효기간
+            <input id="doc-valid" type="date" autocomplete="off">
+          </label>
+          <label class="field">부가세
+            <select id="vat-mode">
+              <option value="exclusive">별도 (공급가 + 10%)</option>
+              <option value="inclusive">포함 (입력 금액이 합계)</option>
+              <option value="exempt">면세</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions" style="position:static">
+          <button type="button" class="btn" id="next-number">다음 번호</button>
+          <button type="button" class="btn" id="fill-example">예시로 보기</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>공급자</legend>
+        <div class="grid-2">
+          <label class="field">상호 <input data-seller="name" autocomplete="off"></label>
+          <label class="field">대표자 <input data-seller="owner" autocomplete="off"></label>
+          <label class="field">사업자등록번호 <input data-seller="bizNo" autocomplete="off"></label>
+          <label class="field">전화 <input data-seller="phone" autocomplete="off"></label>
+          <label class="field">업태 <input data-seller="bizType" autocomplete="off"></label>
+          <label class="field">종목 <input data-seller="bizItem" autocomplete="off"></label>
+        </div>
+        <label class="field" style="margin-top:8px">주소 <input data-seller="address" autocomplete="off"></label>
+        <div class="grid-2" style="margin-top:8px">
+          <label class="field">이메일 <input data-seller="email" autocomplete="off"></label>
+          <label class="field">계좌 <input data-seller="bank" autocomplete="off"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>공급받는 자</legend>
+        <div class="grid-2">
+          <label class="field">상호 <input data-buyer="name" autocomplete="off"></label>
+          <label class="field">담당 <input data-buyer="contact" autocomplete="off"></label>
+          <label class="field">연락처 <input data-buyer="phone" autocomplete="off"></label>
+          <label class="field">이메일 <input data-buyer="email" autocomplete="off"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>품목</legend>
+        <div class="choice-row" style="margin-bottom:8px">
+          <label class="field">업종 예시
+            <select id="preset">
+              <option value="">선택</option>
+              <option value="freelance">프리랜서</option>
+              <option value="studio">공방</option>
+              <option value="class">학원</option>
+              <option value="repair">수리</option>
+            </select>
+          </label>
+          <button type="button" class="btn" id="apply-preset">품목에 적용</button>
+          <button type="button" class="btn" id="add-item">품목 추가</button>
+        </div>
+        <div class="item-head">
+          <span>품명</span><span>규격</span><span>수량</span><span>단가</span><span>비고</span><span></span>
+        </div>
+        <div id="items"></div>
+      </fieldset>
+
+      <label class="field">비고
+        <textarea id="doc-note"></textarea>
+      </label>
+      <div class="totals-inline" aria-live="polite">
+        <div><span>공급가액</span><strong id="total-supply">0</strong></div>
+        <div><span>세액</span><strong id="total-vat">0</strong></div>
+        <div><span>합계</span><strong id="total-grand">0</strong></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn primary" id="print-doc">인쇄 / PDF</button>
+        <button type="button" class="btn" id="export-backup">백업 받기</button>
+        <button type="button" class="btn" id="import-backup">백업 불러오기</button>
+        <button type="button" class="btn danger" id="reset-all">전체 지우기</button>
+        <input id="import-file" type="file" accept="application/json,.json" hidden>
+      </div>
+    </div>
+    <div class="preview-frame">
+      <article id="sheet" class="sheet" aria-label="문서 미리보기"></article>
+    </div>
+  </section>
+
+  <section id="view-quote" class="view">
+    <div class="panel split">
+      <div class="card">
+        <h2>작업 단가</h2>
+        <p class="hint">시간당 단가에 수정 여유와 마진을 더하고, 플랫폼 수수료가 있으면 고객 결제액 기준으로 다시 올립니다. 직접 거래면 수수료는 0입니다.</p>
+        <div id="tasks"></div>
+        <button type="button" class="btn" id="add-task">작업 추가</button>
+        <div class="grid-2" style="margin-top:12px">
+          <label class="field">시간당 단가 (원)
+            <input id="hourly" inputmode="decimal" autocomplete="off">
+          </label>
+          <label class="field">수정 여유 (%)
+            <input id="buffer" inputmode="decimal" autocomplete="off">
+          </label>
+          <label class="field">목표 마진 (%)
+            <input id="margin" inputmode="decimal" autocomplete="off">
+          </label>
+          <label class="field">플랫폼 수수료 (%)
+            <input id="fee" inputmode="decimal" autocomplete="off">
+          </label>
+        </div>
+      </div>
+      <div class="result">
+        <div class="hint">제안 견적</div>
+        <div class="big" id="quote-suggested">0원</div>
+        <dl id="quote-lines"></dl>
+        <p class="hint" id="quote-msg"></p>
+        <button type="button" class="btn primary" id="quote-to-doc">이 금액으로 견적서 만들기</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-ledger" class="view">
+    <div class="panel">
+      <h2>월간 장부</h2>
+      <p class="hint">공급가액만 입력합니다. 과세에 체크하면 세액 10%를 가산합니다. 이 숫자는 가계산이며 부가세 신고서를 대신하지 않습니다.</p>
+      <div class="grid-3" style="max-width:520px">
+        <label class="field">연도
+          <input id="ledger-year" inputmode="numeric" autocomplete="off">
+        </label>
+        <label class="field">월
+          <select id="ledger-month"></select>
+        </label>
+        <label class="field">이 달
+          <input id="ledger-count" readonly>
+        </label>
+      </div>
+      <div class="sums">
+        <div class="sum"><span>매출 합계</span><b id="ledger-sales">0</b></div>
+        <div class="sum"><span>비용 합계</span><b id="ledger-costs">0</b></div>
+        <div class="sum"><span>차액</span><b id="ledger-net">0</b></div>
+        <div class="sum"><span>세액 차감 참고</span><b id="ledger-vat">0</b></div>
+      </div>
+      <fieldset>
+        <legend>기록 추가</legend>
+        <div class="grid-3">
+          <label class="field">날짜 <input id="entry-date" type="date"></label>
+          <label class="field">구분
+            <select id="entry-kind">
+              <option value="in">매출</option>
+              <option value="out">비용</option>
+            </select>
+          </label>
+          <label class="field">공급가액 <input id="entry-supply" inputmode="decimal" autocomplete="off"></label>
+          <label class="field">거래처 <input id="entry-party" autocomplete="off"></label>
+          <label class="field">적요 <input id="entry-memo" autocomplete="off"></label>
+          <label class="field">과세
+            <select id="entry-taxed">
+              <option value="yes">과세 10%</option>
+              <option value="no">면세</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions" style="position:static">
+          <button type="button" class="btn primary" id="add-entry">장부에 추가</button>
+        </div>
+      </fieldset>
+      <div class="table-wrap">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>날짜</th><th>구분</th><th>거래처</th><th>적요</th><th>공급가액</th><th>과세</th><th>세액</th><th>합계</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="ledger-rows"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="ledger-empty" style="margin-top:8px">이 달에 기록이 없습니다.</p>
+    </div>
+  </section>
+
+  <script src="js/calc.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
