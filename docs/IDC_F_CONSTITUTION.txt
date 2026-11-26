@@ -1,47 +1,19 @@
-# IDC_F 헌법 — 안2「안정 균형」v2.0
+# IDC_F 헌법 — 안2「안정 균형」v2.10 완전무결판
 
-EA 이름: IDC_F
-플랫폼: MT4 전용 (#property strict)
-소스: MQL4/Experts/IDC_F.mq4
-기준 계좌: FTMO 10만 USD
-교수님 최우선: 월 안정적 소득
-제작일: 2026-11-26
+EA: IDC_F | MT4 #property strict | MQL4/Experts/IDC_F.mq4
+교수님: 안2 확정 | 최우선: 월 안정 소득 | FTMO 10만 USD
 
----
+## 전략
+REG(EURUSD·XAUUSD): 세션 VWAP(KST 16:00 앵커 누적) 이탈→M5 복귀, H1Chop. 일 REG≤2.
+PULL(US100계열): M15 임펄스→M5 눌림, H1TrendOnly. 일 PULL≤1, 랏0.24%.
+STAB_GATE: σ(R20)>1.15 또는 3연손 또는 dayR≤-1.2 → PULL OFF (파일 v3 영속).
+일 체결≤3. 학습: gW(REG), gWPull(PULL) 분리. learn v3, open isPull.
 
-## 1. 전략 개요
+## TF
+부착 XAUUSD M5. InpSignalTF=5, InpTrendTF=60, InpStructureTF=15.
 
-- 패턴 A REG (65% 체결 목표): 세션 VWAP 이탈 후 M5 복귀, H1 횡보만. EURUSD·XAUUSD.
-- 패턴 B PULL (35%): M15 임펄스 후 M5 첫 눌림, H1 방향만 일치. US100(별칭 1종).
-- STAB_GATE: 최근 20R 표준편차 > InpStabStdR 또는 연속 3손실 → 당일 PULL OFF. 당일 누적 R ≤ InpDayPullStopR → PULL OFF.
-- 일 체결 상한 3 (REG 2 + PULL 1 목표).
+## 디버그
+InpDebugLog ON: M5마다 게이트+REG/Pull O/X+verdict.
 
-## 2. 타임프레임
-
-- 부착 권장: XAUUSD M5
-- 신호: M5 종가 shift=1
-- 추세: H1 EMA50
-- 구조: M15 (PULL만)
-
-## 3. 게이트 (IDC_R 동일)
-
-KST 세션 16:00–00:30, 서버 00:00–02:00 차단, 일손실 2%, 에쿼티 93%, 스프레드·중앙·시세 30초, 종목당 1포지션.
-
-## 4. 골드 최적 디폴트 (입력)
-
-InpMagic=261126, InpLotMode=LOT_PERCENT, InpRiskPercent=0.30, InpRiskMaxPercent=0.40
-InpSignalTF=5, InpTrendTF=60, InpStructureTF=15, InpEmaPeriod=50, InpAtrPeriod=14
-InpUseGold=true, InpUseFX=true, InpUseIndex=true, InpUseCrypto=false, InpPlan2Whitelist=true
-InpMaxTradesDay=3, InpPullRiskPercent=0.24, InpRegDevAtr=0.45, InpH1ChopAtr=0.35
-InpImpulseAtr=0.85, InpVwapBars=96, InpReclaimAtr=0.40, InpScoreCutStart=40
-InpSession 16:00–00:30, InpCloseAtSessionEnd=true, InpInitialBalance=0 (실계 100000)
-InpDebugLog=false (검증 시 true)
-
-## 5. 학습 파일
-
-IDC_F_learn.txt, IDC_F_open.txt (Files 폴더)
-
-## 6. 서명
-
-교수님: 안2·IDC_F 확정
-구현: IDC_F.mq4 v2.00
+## 골드 디폴트
+Presets/IDC_F_XAUUSD_M5.set

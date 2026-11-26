@@ -1,5 +1,5 @@
-﻿#property copyright "IDC_F v2.0"
-#property version   "2.00"
+﻿#property copyright "IDC_F v2.10"
+#property version   "2.10"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -21,7 +21,7 @@ input int    InpEmaPeriod          = 50;           // H1 EMA 기간
 input int    InpH1SlopeBars        = 3;            // H1 EMA 기울기 봉 수
 input int    InpAtrPeriod          = 14;           // ATR 기간
 input double InpReclaimAtr         = 0.40;         // 복귀 바 범위 / M5 ATR
-input int    InpSweepMaxBars       = 6;            // 스윕 확인 봉 수
+input int    InpMinHistBars        = 40;           // 신호 TF 최소 봉 수 (히스토리)
 input int    InpAsiaStartHour      = 0;            // 아시아 시작 GMT 시
 input int    InpAsiaEndHour        = 6;            // 아시아 끝 GMT 시
 input int    InpSessionStartHour   = 16;           // 거래 시작 시 (한국시간)
@@ -92,6 +92,7 @@ int      SSpreadPos[MAXS];
 int      gN = 0;
 
 double   gW[4] = {1.0, 1.0, 1.0, 1.0};
+double   gWPull[4] = {1.0, 1.0, 1.0, 1.0};
 int      gClosed = 0;
 double   gPR[3];
 int      gPN[3];
@@ -105,6 +106,7 @@ double   gOpenFeat[MAXOPEN][4];
 int      gOpenPreset[MAXOPEN];
 double   gOpenRisk[MAXOPEN];
 double   gOpenExtreme[MAXOPEN];
+bool     gOpenIsPull[MAXOPEN];
 int      gOpenN = 0;
 
 int      gDayKey = 0;
@@ -132,6 +134,7 @@ int      gLossStreak = 0;
 bool     gStabGate = false;
 double   gDayR = 0.0;
 int      gPullToday = 0;
+int      gRegToday = 0;
 
 int LockPoints(int start, int step, int stand, int profitPts)
 {
@@ -322,6 +325,11 @@ bool PullAllowedNow()
    return(true);
 }
 
+bool RegAllowedNow()
+{
+   return(gRegToday < 2);
+}
+
 void PushRecentR(double R)
 {
    int i;
@@ -491,21 +499,6 @@ string StepMark(int reached, int at)
    if(reached > at) return("O");
    if(reached == at) return("X");
    return("-");
-}
-
-string LevelOx(string name, int reached)
-{
-   return(name
-      + " 스윕" + StepMark(reached, 0)
-      + " 복귀" + StepMark(reached, 1)
-      + " 첫복귀" + StepMark(reached, 2)
-      + " H1" + StepMark(reached, 3)
-      + " 품질" + StepMark(reached, 4)
-      + " 추격" + StepMark(reached, 5)
-      + " 손절" + StepMark(reached, 6)
-      + " 스프레드상한" + StepMark(reached, 7)
-      + " 손절대비" + StepMark(reached, 8)
-      + " 후보" + StepMark(reached, 9));
 }
 
 void FlushOx(string sym, string verdict)
@@ -738,27 +731,6 @@ int MedianSpread(int slot)
    return(tmp[n / 2]);
 }
 
-bool H1Ok(string sym, int dir)
-{
-   int emaP;
-   int slope;
-   int shiftBack;
-   double ema;
-   double emaPrev;
-   double cl;
-   emaP = InpEmaPeriod;
-   if(emaP < 1) emaP = 1;
-   slope = InpH1SlopeBars;
-   if(slope < 1) slope = 1;
-   shiftBack = 1 + slope;
-   ema = iMA(sym, InpTrendTF, emaP, 0, MODE_EMA, PRICE_CLOSE, 1);
-   emaPrev = iMA(sym, InpTrendTF, emaP, 0, MODE_EMA, PRICE_CLOSE, shiftBack);
-   cl = iClose(sym, InpTrendTF, 1);
-   if(ema == 0.0 || cl == 0.0) return(false);
-   if(dir > 0) return(cl > ema && ema >= emaPrev);
-   return(cl < ema && ema <= emaPrev);
-}
-
 bool H1TrendOnly(string sym, int dir)
 {
    int emaP;
@@ -892,11 +864,24 @@ double Clamp01(double x)
    return(x);
 }
 
-double ScoreOf(double &f[])
+double ScoreOfFeat(double &f[], bool isPull)
 {
-   double sw = gW[0] + gW[1] + gW[2] + gW[3];
+   double sw;
+   double w0;
+   double w1;
+   double w2;
+   double w3;
+   if(isPull)
+   {
+      w0 = gWPull[0]; w1 = gWPull[1]; w2 = gWPull[2]; w3 = gWPull[3];
+   }
+   else
+   {
+      w0 = gW[0]; w1 = gW[1]; w2 = gW[2]; w3 = gW[3];
+   }
+   sw = w0 + w1 + w2 + w3;
    if(sw <= 0.0) return(0.0);
-   return((gW[0] * f[0] + gW[1] * f[1] + gW[2] * f[2] + gW[3] * f[3]) / sw);
+   return((w0 * f[0] + w1 * f[1] + w2 * f[2] + w3 * f[3]) / sw);
 }
 
 void PushScore(double s)
@@ -952,66 +937,6 @@ bool GateScore(double score)
    return(true);
 }
 
-bool AsiaWindow(double &hi, double &lo, string sym)
-{
-   int sh;
-   int eh;
-   int bars;
-   int limit;
-   int i;
-   datetime nowG;
-   datetime dayStart;
-   datetime endT;
-   datetime startT;
-   datetime bt;
-   datetime gmt;
-   bool found;
-   double h;
-   double l;
-   double bh;
-   double bl;
-   hi = 0.0;
-   lo = 0.0;
-   sh = InpAsiaStartHour;
-   eh = InpAsiaEndHour;
-   if(sh < 0) sh = 0;
-   if(eh > 24) eh = 24;
-   if(eh <= sh) return(false);
-   nowG = GmtNow();
-   dayStart = nowG - (nowG % 86400);
-   endT = dayStart + eh * 3600;
-   if(nowG < endT) endT -= 86400;
-   startT = endT - (eh - sh) * 3600;
-   bars = iBars(sym, InpSignalTF);
-   if(bars < 20) return(false);
-   limit = bars - 1;
-   if(limit > 400) limit = 400;
-   found = false;
-   h = 0.0;
-   l = 0.0;
-   for(i = 1; i <= limit; i++)
-   {
-      bt = iTime(sym, InpSignalTF, i);
-      if(bt <= 0) continue;
-      gmt = bt - gBrokerOff;
-      if(gmt >= endT) continue;
-      if(gmt < startT) break;
-      bh = iHigh(sym, InpSignalTF, i);
-      bl = iLow(sym, InpSignalTF, i);
-      if(bh <= 0.0 || bl <= 0.0) continue;
-      if(!found) { h = bh; l = bl; found = true; }
-      else
-      {
-         if(bh > h) h = bh;
-         if(bl < l) l = bl;
-      }
-   }
-   if(!found || h <= l) return(false);
-   hi = h;
-   lo = l;
-   return(true);
-}
-
 bool SlAccept(string sym, int dir, double entryPx, double sl, int slmin, int slmax)
 {
    double point;
@@ -1047,12 +972,14 @@ bool SlAccept(string sym, int dir, double entryPx, double sl, int slmin, int slm
    return(true);
 }
 
-int SweepBars()
+int MinHistBarsNeeded()
 {
-   int maxB = InpSweepMaxBars;
-   if(maxB < 1) maxB = 1;
-   if(maxB > 500) maxB = 500;
-   return(maxB);
+   int n;
+   n = InpMinHistBars;
+   if(n < 30) n = 30;
+   if(n > 500) n = 500;
+   if(InpVwapBars + 14 > n) n = InpVwapBars + 14;
+   return(n);
 }
 
 int CollectReg(string sym,
@@ -1157,7 +1084,7 @@ int CollectReg(string sym,
    feat[0][1] = ff[1];
    feat[0][2] = ff[2];
    feat[0][3] = ff[3];
-   score[0] = ScoreOf(ff);
+   score[0] = ScoreOfFeat(ff, false);
    tag[0] = "REG";
    OxLine(RegOx(reached));
    return(1);
@@ -1294,7 +1221,7 @@ int CollectPull(string sym,
    feat[0][1] = ff[1];
    feat[0][2] = ff[2];
    feat[0][3] = ff[3];
-   score[0] = ScoreOf(ff);
+   score[0] = ScoreOfFeat(ff, true);
    tag[0] = "PULL";
    OxLine(PullOx(reached));
    return(1);
@@ -1306,7 +1233,15 @@ int CollectSignals(string sym,
 {
    int pat;
    pat = PatternOf(sym);
-   if(pat == PAT_REG) return(CollectReg(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag));
+   if(pat == PAT_REG)
+   {
+      if(!RegAllowedNow())
+      {
+         OxLine("REG 일상한");
+         return(0);
+      }
+      return(CollectReg(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag));
+   }
    if(pat == PAT_PULL)
    {
       if(!PullAllowedNow())
@@ -1419,8 +1354,7 @@ bool MarkBar(string sym, int slot)
    bar = iTime(sym, InpSignalTF, 0);
    if(bar <= 0) return(false);
    if(bar == gBarOf[slot]) return(false);
-   need = SweepBars() + 5;
-   if(need < 30) need = 30;
+   need = MinHistBarsNeeded();
    if(iBars(sym, InpSignalTF) < need) return(false);
    gBarOf[slot] = bar;
    return(true);
@@ -1440,7 +1374,8 @@ bool CanEnter(string sym, int slot)
    bool flat;
    tradeOk = (MarketInfo(sym, MODE_TRADEALLOWED) > 0.0);
    autoOk = (IsTesting() || IsTradeAllowed());
-   known = (PatternOf(sym) != 0 || OverridesComplete());
+   if(InpPlan2Whitelist) known = (PatternOf(sym) != 0);
+   else known = (ClassOf(sym) != 0 || OverridesComplete());
    fresh = QuoteFresh(sym);
    medOk = SpreadOkMedian(slot, sym);
    sess = InSession();
@@ -1627,9 +1562,11 @@ void SaveLearn()
    string line;
    h = FileOpen("IDC_F_learn.txt", FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE) return;
-   line = "v2," + IntegerToString(gClosed) + "," +
+   line = "v3," + IntegerToString(gClosed) + "," +
           DoubleToString(gW[0], 6) + "," + DoubleToString(gW[1], 6) + "," +
           DoubleToString(gW[2], 6) + "," + DoubleToString(gW[3], 6) + "," +
+          DoubleToString(gWPull[0], 6) + "," + DoubleToString(gWPull[1], 6) + "," +
+          DoubleToString(gWPull[2], 6) + "," + DoubleToString(gWPull[3], 6) + "," +
           DoubleToString(gPR[0], 4) + "," + IntegerToString(gPN[0]) + "," +
           DoubleToString(gPR[1], 4) + "," + IntegerToString(gPN[1]) + "," +
           DoubleToString(gPR[2], 4) + "," + IntegerToString(gPN[2]) + "," +
@@ -1640,6 +1577,11 @@ void SaveLearn()
           IntegerToString(gScoreN);
    for(i = 0; i < gScoreN; i++)
       line = line + "," + DoubleToString(gScore[i], 6);
+   line = line + "," + IntegerToString(gRecentRn) + "," + IntegerToString(gLossStreak) +
+          "," + IntegerToString(gStabGate ? 1 : 0) + "," + IntegerToString(gPullToday) +
+          "," + IntegerToString(gRegToday) + "," + DoubleToString(gDayR, 4);
+   for(i = 0; i < gRecentRn; i++)
+      line = line + "," + DoubleToString(gRecentR[i], 4);
    FileWriteString(h, line + "\n");
    FileClose(h);
 }
@@ -1657,13 +1599,14 @@ void SaveOpen()
              DoubleToString(gOpenFeat[i][0], 4) + "," + DoubleToString(gOpenFeat[i][1], 4) + "," +
              DoubleToString(gOpenFeat[i][2], 4) + "," + DoubleToString(gOpenFeat[i][3], 4) + "," +
              IntegerToString(gOpenPreset[i]) + "," + DoubleToString(gOpenRisk[i], 4) + "," +
-             DoubleToString(gOpenExtreme[i], 10);
+             DoubleToString(gOpenExtreme[i], 10) + "," +
+             IntegerToString(gOpenIsPull[i] ? 1 : 0);
       FileWriteString(h, line + "\n");
    }
    FileClose(h);
 }
 
-bool AddOpen(int ticket, double &f[], int preset, double risk, double extreme)
+bool AddOpen(int ticket, double &f[], int preset, double risk, double extreme, bool isPull)
 {
    int i;
    if(ticket <= 0 || gOpenN >= MAXOPEN) return(false);
@@ -1678,6 +1621,7 @@ bool AddOpen(int ticket, double &f[], int preset, double risk, double extreme)
    gOpenPreset[i] = preset;
    gOpenRisk[i] = risk;
    gOpenExtreme[i] = extreme;
+   gOpenIsPull[i] = isPull;
    gOpenN++;
    SaveOpen();
    return(true);
@@ -1690,6 +1634,8 @@ void ClampWeights()
    {
       if(gW[k] < 0.05) gW[k] = 0.05;
       if(gW[k] > 2.5) gW[k] = 2.5;
+      if(gWPull[k] < 0.05) gWPull[k] = 0.05;
+      if(gWPull[k] > 2.5) gWPull[k] = 2.5;
    }
 }
 
@@ -1705,10 +1651,20 @@ void LoadLearn()
    int n;
    int i;
    int sn;
+   int base;
+   int rn;
+   int ri;
    double ib;
    string line;
    string p[];
    gW[0] = 1.0; gW[1] = 1.0; gW[2] = 1.0; gW[3] = 1.0;
+   gWPull[0] = 1.0; gWPull[1] = 1.0; gWPull[2] = 1.0; gWPull[3] = 1.0;
+   gRecentRn = 0;
+   gLossStreak = 0;
+   gStabGate = false;
+   gPullToday = 0;
+   gRegToday = 0;
+   gDayR = 0.0;
    gClosed = 0;
    gPR[0] = 0.0; gPR[1] = 0.0; gPR[2] = 0.0;
    gPN[0] = 0; gPN[1] = 0; gPN[2] = 0;
@@ -1724,13 +1680,71 @@ void LoadLearn()
    {
       line = StripCr(FileReadString(h));
       n = SplitComma(line, p);
-      if(n >= 18 && (p[0] == "v1" || p[0] == "v2"))
+      if(n >= 18 && (p[0] == "v1" || p[0] == "v2" || p[0] == "v3"))
       {
          gClosed = (int)StringToInteger(p[1]);
          gW[0] = StringToDouble(p[2]);
          gW[1] = StringToDouble(p[3]);
          gW[2] = StringToDouble(p[4]);
          gW[3] = StringToDouble(p[5]);
+         if(p[0] == "v3" && n >= 22)
+         {
+            gWPull[0] = StringToDouble(p[6]);
+            gWPull[1] = StringToDouble(p[7]);
+            gWPull[2] = StringToDouble(p[8]);
+            gWPull[3] = StringToDouble(p[9]);
+            gPR[0] = StringToDouble(p[10]);  gPN[0] = (int)StringToInteger(p[11]);
+            gPR[1] = StringToDouble(p[12]);  gPN[1] = (int)StringToInteger(p[13]);
+            gPR[2] = StringToDouble(p[14]); gPN[2] = (int)StringToInteger(p[15]);
+            gPercentile = (int)StringToInteger(p[16]);
+            if(InpInitialBalance <= 0.0)
+            {
+               ib = StringToDouble(p[17]);
+               if(ib > 0.0) gInitBal = ib;
+            }
+            gDayKey = (int)StringToInteger(p[18]);
+            gTradesToday = (int)StringToInteger(p[19]);
+            gModifiesToday = (int)StringToInteger(p[20]);
+            gEntrySeq = (int)StringToInteger(p[21]);
+            if(n >= 23 && StringToInteger(p[22]) != 0) gDayLocked = true;
+            if(n >= 24) { gDayStartBal = StringToDouble(p[23]); if(gDayStartBal < 0.0) gDayStartBal = 0.0; }
+            if(n >= 25)
+            {
+               sn = (int)StringToInteger(p[24]);
+               if(sn < 0) sn = 0;
+               if(sn > MAXSCORE) sn = MAXSCORE;
+               gScoreN = 0;
+               for(i = 0; i < sn; i++)
+               {
+                  if(25 + i >= n) break;
+                  gScore[gScoreN] = StringToDouble(p[25 + i]);
+                  gScoreN++;
+               }
+            }
+            if(n >= 26)
+            {
+               base = 25 + gScoreN;
+               if(base < n) gRecentRn = (int)StringToInteger(p[base]);
+               if(gRecentRn < 0) gRecentRn = 0;
+               if(gRecentRn > REC_R) gRecentRn = REC_R;
+               if(base + 1 < n) gLossStreak = (int)StringToInteger(p[base + 1]);
+               if(base + 2 < n) gStabGate = (StringToInteger(p[base + 2]) != 0);
+               if(base + 3 < n) gPullToday = (int)StringToInteger(p[base + 3]);
+               if(base + 4 < n) gRegToday = (int)StringToInteger(p[base + 4]);
+               if(base + 5 < n) gDayR = StringToDouble(p[base + 5]);
+               rn = gRecentRn;
+               for(ri = 0; ri < rn; ri++)
+               {
+                  if(base + 6 + ri >= n) break;
+                  gRecentR[ri] = StringToDouble(p[base + 6 + ri]);
+               }
+            }
+            FileClose(h);
+            ClampWeights();
+            ClampPercentile();
+            RecomputeStabGate();
+            return;
+         }
          gPR[0] = StringToDouble(p[6]);  gPN[0] = (int)StringToInteger(p[7]);
          gPR[1] = StringToDouble(p[8]);  gPN[1] = (int)StringToInteger(p[9]);
          gPR[2] = StringToDouble(p[10]); gPN[2] = (int)StringToInteger(p[11]);
@@ -1796,6 +1810,7 @@ void LoadOpen()
       gOpenPreset[gOpenN] = (int)StringToInteger(p[5]);
       gOpenRisk[gOpenN] = StringToDouble(p[6]);
       gOpenExtreme[gOpenN] = StringToDouble(p[7]);
+      gOpenIsPull[gOpenN] = (n >= 9 && StringToInteger(p[8]) != 0);
       if(gOpenTicket[gOpenN] > 0) gOpenN++;
    }
    FileClose(h);
@@ -1819,7 +1834,10 @@ void OnClosedTrade(int idx, double profitMoney)
    lr = lr / (1.0 + gClosed / 120.0);
    for(k = 0; k < 4; k++)
    {
-      gW[k] += lr * (R - InpBaselineR) * gOpenFeat[idx][k];
+      if(gOpenIsPull[idx])
+         gWPull[k] += lr * (R - InpBaselineR) * gOpenFeat[idx][k];
+      else
+         gW[k] += lr * (R - InpBaselineR) * gOpenFeat[idx][k];
    }
    ClampWeights();
    gPR[preset] += R;
@@ -1893,7 +1911,7 @@ void AdoptOrphans()
       else ext = MarketInfo(sym, MODE_ASK);
       digits = (int)MarketInfo(sym, MODE_DIGITS);
       ext = NormalizeDouble(ext, digits);
-      if(AddOpen(ticket, f, 1, risk, ext))
+      if(AddOpen(ticket, f, 1, risk, ext, (PatternOf(sym) == PAT_PULL)))
          Print("IDC_F adopt ", IntegerToString(ticket), " ", sym);
    }
 }
@@ -1949,6 +1967,7 @@ void RollDay()
    gDayStartBal = AccountBalance();
    gTradesToday = 0;
    gPullToday = 0;
+   gRegToday = 0;
    gDayR = 0.0;
    gModifiesToday = 0;
    gDayLocked = false;
@@ -2002,7 +2021,8 @@ bool TryEntry(string sym, int slot)
    gOxSent = false;
    gGateLine = "";
    gBlock = "";
-   known = (PatternOf(sym) != 0 || OverridesComplete());
+   if(InpPlan2Whitelist) known = (PatternOf(sym) != 0);
+   else known = (ClassOf(sym) != 0 || OverridesComplete());
    if(gTradesToday >= InpMaxTradesDay)
    {
       if(InpDebugLog) FlushOx(sym, "진입X 일상한");
@@ -2086,6 +2106,7 @@ bool TryEntry(string sym, int slot)
    if(ticket <= 0) { FlushOx(sym, "진입X 주문"); return(false); }
    gTradesToday++;
    if(tag[pick] == "PULL") gPullToday++;
+   else gRegToday++;
    gEntrySeq++;
    realRisk = riskMoney;
    if(OrderSelect(ticket, SELECT_BY_TICKET))
@@ -2094,7 +2115,7 @@ bool TryEntry(string sym, int slot)
       realRisk = MathAbs(openPx - sl[pick]) / point * mpp * OrderLots();
       if(realRisk <= 0.0) realRisk = riskMoney;
    }
-   AddOpen(ticket, ff, preset, realRisk, extreme[pick]);
+   AddOpen(ticket, ff, preset, realRisk, extreme[pick], (tag[pick] == "PULL"));
    Print("IDC_F entry ", sym, " ", tag[pick], " lot=", DoubleToString(lot, 4), " ", TfNote());
    FlushOx(sym, "진입O " + tag[pick] + " 점수" + DoubleToString(score[pick], 2));
    SaveLearn();
@@ -2309,13 +2330,14 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.0 안2  " + TfNote() + "\n";
+   text = "IDC_F v2.10 안2  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
    text = text + "  learn=" + IntegerToString(gClosed) + "/" + IntegerToString(WarmCount()) + "\n";
    text = text + "today=" + IntegerToString(gTradesToday) + "/" + IntegerToString(InpMaxTradesDay);
-   text = text + "  pull=" + IntegerToString(gPullToday) + "  dayR=" + DoubleToString(gDayR, 2) + "\n";
+   text = text + " REG=" + IntegerToString(gRegToday) + " pull=" + IntegerToString(gPullToday);
+   text = text + "  dayR=" + DoubleToString(gDayR, 2) + "\n";
    text = text + "cut=" + IntegerToString(gPercentile) + "  riskOK=" + (RiskAllowsEntry() ? "Y" : "N") + "\n";
    text = text + "W " + DoubleToString(gW[0], 2) + " " + DoubleToString(gW[1], 2) + " " + DoubleToString(gW[2], 2) + " " + DoubleToString(gW[3], 2);
    Comment(text);
@@ -2373,7 +2395,7 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.0 self-test OK ", TfNote(), " plan2 REG+PULL");
+   Print("IDC_F v2.10 self-test OK ", TfNote(), " plan2 REG+PULL");
    if(InpInitialBalance > 0.0) gInitBal = InpInitialBalance;
    LoadLearn();
    if(gInitBal <= 0.0) gInitBal = AccountBalance();
