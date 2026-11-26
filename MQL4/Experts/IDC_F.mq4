@@ -1,4 +1,4 @@
-﻿#property copyright "IDC_F v2.10"
+﻿#property copyright "IDC_F v2.11"
 #property version   "2.11"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
@@ -2353,7 +2353,7 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.10 안2  " + TfNote() + "\n";
+   text = "IDC_F v2.11 안2  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
@@ -2418,7 +2418,7 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.12 self-test OK ", TfNote(), " plan2 REG+PULL");
+   Print("IDC_F v2.11 self-test OK ", TfNote(), " plan2 REG+PULL");
    if(InpDebugLog)
       Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
    else
