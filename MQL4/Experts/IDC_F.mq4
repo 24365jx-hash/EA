@@ -1,5 +1,5 @@
 ﻿#property copyright "IDC_F v2.10"
-#property version   "2.10"
+#property version   "2.11"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -91,8 +91,8 @@ int      SSpreadN[MAXS];
 int      SSpreadPos[MAXS];
 int      gN = 0;
 
-double   gW[4] = {1.0, 1.0, 1.0, 1.0};
-double   gWPull[4] = {1.0, 1.0, 1.0, 1.0};
+double   gW[4];
+double   gWPull[4];
 int      gClosed = 0;
 double   gPR[3];
 int      gPN[3];
@@ -135,6 +135,16 @@ bool     gStabGate = false;
 double   gDayR = 0.0;
 int      gPullToday = 0;
 int      gRegToday = 0;
+
+void InitDefaultWeights()
+{
+   int k;
+   for(k = 0; k < 4; k++)
+   {
+      gW[k] = 1.0;
+      gWPull[k] = 1.0;
+   }
+}
 
 int LockPoints(int start, int step, int stand, int profitPts)
 {
@@ -2396,6 +2406,7 @@ int OnInit()
       return(INIT_FAILED);
    }
    Print("IDC_F v2.10 self-test OK ", TfNote(), " plan2 REG+PULL");
+   InitDefaultWeights();
    if(InpInitialBalance > 0.0) gInitBal = InpInitialBalance;
    LoadLearn();
    if(gInitBal <= 0.0) gInitBal = AccountBalance();
