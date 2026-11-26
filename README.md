@@ -6,4 +6,4 @@ FTMO 10만 달러, MT4 전용.
 - **V2 (신규 설계)**: [docs/EA_V2_PURPOSE.md](docs/EA_V2_PURPOSE.md) · [docs/EA_V2_DESIGN_SPEC.md](docs/EA_V2_DESIGN_SPEC.md)
 - 선택표 (참고): [docs/SELF_LEARNING_EA_STRATEGY_PROPOSALS.md](docs/SELF_LEARNING_EA_STRATEGY_PROPOSALS.md)
 
-S1은 평균 일 1.8회 설계로 **일 2체결 하한**과 맞지 않아 동결되었습니다. V2는 목적 재정의 후 **이중 패턴(REG+PULL)** 으로 빈도를 설계합니다.
+S1 동결. V2 최우선: **월 안정적 소득**(하위 분위·손실 월 관리). 엔진: **REG(S3 회귀) 중심** + 조건부 PULL.
