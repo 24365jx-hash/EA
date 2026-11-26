@@ -86,6 +86,7 @@ input int    InpVwapBars           = 96;           // REG VWAP 누적 M5 봉 (�
 
 string   SName[MAXS];
 datetime gBarOf[MAXS];
+datetime gBarHistWarn[MAXS];
 int      SSpread[MAXS][32];
 int      SSpreadN[MAXS];
 int      SSpreadPos[MAXS];
@@ -679,6 +680,7 @@ void EnsureSymbol(string sym)
    if(MarketInfo(sym, MODE_POINT) <= 0.0) return;
    SName[gN] = sym;
    gBarOf[gN] = 0;
+   gBarHistWarn[gN] = 0;
    SSpreadN[gN] = 0;
    SSpreadPos[gN] = 0;
    gN++;
@@ -982,13 +984,12 @@ bool SlAccept(string sym, int dir, double entryPx, double sl, int slmin, int slm
    return(true);
 }
 
-int MinHistBarsNeeded()
+int MarkBarMinHist()
 {
    int n;
    n = InpMinHistBars;
    if(n < 30) n = 30;
    if(n > 500) n = 500;
-   if(InpVwapBars + 14 > n) n = InpVwapBars + 14;
    return(n);
 }
 
@@ -1361,11 +1362,22 @@ bool MarkBar(string sym, int slot)
 {
    datetime bar;
    int need;
+   int have;
    bar = iTime(sym, InpSignalTF, 0);
    if(bar <= 0) return(false);
    if(bar == gBarOf[slot]) return(false);
-   need = MinHistBarsNeeded();
-   if(iBars(sym, InpSignalTF) < need) return(false);
+   need = MarkBarMinHist();
+   have = iBars(sym, InpSignalTF);
+   if(have < need)
+   {
+      if(InpDebugLog && gBarHistWarn[slot] != bar)
+      {
+         gBarHistWarn[slot] = bar;
+         Print("IDC_F ", sym, " hist ", IntegerToString(have), "/", IntegerToString(need),
+               " — M5 O/X 대기 (히스토리 부족)");
+      }
+      return(false);
+   }
    gBarOf[slot] = bar;
    return(true);
 }
@@ -2047,7 +2059,8 @@ bool TryEntry(string sym, int slot)
    }
    else
    {
-      if(known) n = CollectSignals(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag);
+      if(PatternOf(sym) != 0)
+         n = CollectSignals(sym, dir, level, extreme, sl, score, depth, clsPx, feat, tag);
       gates = CanEnter(sym, slot);
       if(!gates)
       {
@@ -2405,7 +2418,11 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.10 self-test OK ", TfNote(), " plan2 REG+PULL");
+   Print("IDC_F v2.12 self-test OK ", TfNote(), " plan2 REG+PULL");
+   if(InpDebugLog)
+      Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
+   else
+      Print("IDC_F 진입 O/X 로그 OFF — Inputs에서 InpDebugLog=true 후 재부착");
    InitDefaultWeights();
    if(InpInitialBalance > 0.0) gInitBal = InpInitialBalance;
    LoadLearn();
