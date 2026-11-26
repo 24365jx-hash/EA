@@ -793,11 +793,38 @@ bool H1Chop(string sym)
    return(MathAbs(ema - emaPrev) <= InpH1ChopAtr * h1atr);
 }
 
+datetime SessionStartKst()
+{
+   datetime kn;
+   int nowMin;
+   int a;
+   int b;
+   int daySec;
+   datetime day0;
+   kn = KstNow();
+   nowMin = TimeHour(kn) * 60 + TimeMinute(kn);
+   a = ClockMin(InpSessionStartHour, InpSessionStartMin);
+   b = ClockMin(InpSessionEndHour, InpSessionEndMin);
+   daySec = TimeHour(kn) * 3600 + TimeMinute(kn) * 60 + TimeSeconds(kn);
+   day0 = kn - daySec;
+   if(nowMin >= a) return(day0 + a * 60);
+   if(InWindow(nowMin, 0, b)) return(day0 - 86400 + a * 60);
+   return(day0 + a * 60);
+}
+
+datetime SessionStartServer()
+{
+   return(TimeCurrent() - (KstNow() - SessionStartKst()));
+}
+
 bool SessionVWAP(string sym, double &vwap)
 {
    int i;
    int bars;
-   int useN;
+   int cap;
+   int counted;
+   datetime srvStart;
+   datetime bt;
    double sumPV;
    double sumV;
    double h;
@@ -808,13 +835,16 @@ bool SessionVWAP(string sym, double &vwap)
    vwap = 0.0;
    bars = iBars(sym, InpSignalTF);
    if(bars < 3) return(false);
-   useN = InpVwapBars;
-   if(useN < 10) useN = 10;
-   if(useN > bars - 1) useN = bars - 1;
+   srvStart = SessionStartServer();
+   cap = InpVwapBars;
+   if(cap < 10) cap = 10;
    sumPV = 0.0;
    sumV = 0.0;
-   for(i = 1; i <= useN; i++)
+   counted = 0;
+   for(i = 1; i < bars && counted < cap; i++)
    {
+      bt = iTime(sym, InpSignalTF, i);
+      if(bt < srvStart) break;
       h = iHigh(sym, InpSignalTF, i);
       l = iLow(sym, InpSignalTF, i);
       c = iClose(sym, InpSignalTF, i);
@@ -824,6 +854,7 @@ bool SessionVWAP(string sym, double &vwap)
       tp = (h + l + c) / 3.0;
       sumPV += tp * vol;
       sumV += vol;
+      counted++;
    }
    if(sumV <= 0.0) return(false);
    vwap = sumPV / sumV;
@@ -1418,6 +1449,7 @@ bool CanEnter(string sym, int slot)
    riskOk = RiskAllowsEntry();
    flat = !HasOurPosition(sym);
    gGateLine = "세션" + Yn(sess)
+      + " STAB" + Yn(!gStabGate)
       + " 아시아외" + Yn(asiaOk)
       + " 서버시간" + Yn(hourOk)
       + " 손실한도" + Yn(riskOk)
