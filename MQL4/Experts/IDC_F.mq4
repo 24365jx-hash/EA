@@ -1,5 +1,5 @@
-﻿#property copyright "IDC_F v2.12"
-#property version   "2.12"
+﻿#property copyright "IDC_F v2.13"
+#property version   "2.13"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -52,9 +52,9 @@ input int    InpMaxTickGap         = 30;           // 틱 공백 초
 input double InpSpreadMedianMult   = 2.5;          // 스프레드 / 중앙값 상한
 input double InpSpreadVsSl         = 0.25;         // 스프레드 / 손절거리 상한
 input bool   InpDebugLog           = false;        // 진입 디버그 O/X (매 신호봉)
-input bool   InpUseGold            = true;         // 마켓워치 골드 추가
-input bool   InpUseIndex           = true;         // 마켓워치 지수 추가
-input bool   InpUseFX              = true;         // 마켓워치 FX (안2 EURUSD)
+input bool   InpUseGold            = true;         // GOLD 자동탐색(전종목 스캔)
+input bool   InpUseIndex           = true;         // PULL 지수 자동탐색
+input bool   InpUseFX              = true;         // EURUSD 자동탐색
 input bool   InpUseCrypto          = false;        // 마켓워치 크립토 추가
 input int    InpSweepMinPoints     = 0;            // 스윕 최소 0=등급 자동
 input int    InpSlBufferPoints     = 0;            // 손절 버퍼 0=등급 자동
@@ -91,6 +91,10 @@ int      SSpread[MAXS][32];
 int      SSpreadN[MAXS];
 int      SSpreadPos[MAXS];
 int      gN = 0;
+string   gBrokEur = "";
+string   gBrokGold = "";
+string   gBrokPull = "";
+bool     gBrokSymLogged = false;
 
 double   gW[4];
 double   gWPull[4];
@@ -286,16 +290,38 @@ bool ClassWanted(int cls)
    return(false);
 }
 
+bool PullMatchBase(string b)
+{
+   if(b == "") return(false);
+   if(b == "US100" || b == "NAS100" || b == "USTEC" || b == "ND100" || b == "NASDAQ") return(true);
+   if(b == "USNDX" || b == "NQ100" || b == "USTECH100" || b == "NDX" || b == "NAS100IX") return(true);
+   if(StringFind(b, "NAS100") >= 0 || StringFind(b, "USTEC") >= 0 || StringFind(b, "US100") >= 0) return(true);
+   return(false);
+}
+
+bool EurMatchBase(string b)
+{
+   if(b == "EURUSD") return(true);
+   if(StringFind(b, "EURUSD") == 0 && StringLen(b) <= 10) return(true);
+   return(false);
+}
+
+bool GoldMatchBase(string b)
+{
+   if(b == "XAUUSD" || b == "GOLD") return(true);
+   if(StringFind(b, "XAUUSD") == 0) return(true);
+   if(StringFind(b, "XAU") == 0 && StringFind(b, "XAG") < 0) return(true);
+   return(false);
+}
+
 bool IsPullIndex(string sym)
 {
-   string b = BaseName(sym);
-   if(b == "US100" || b == "NAS100" || b == "USTEC" || b == "ND100" || b == "NASDAQ") return(true);
-   return(false);
+   return(PullMatchBase(BaseName(sym)));
 }
 
 bool IsRegFx(string sym)
 {
-   return(BaseName(sym) == "EURUSD");
+   return(EurMatchBase(BaseName(sym)));
 }
 
 bool IsRegGold(string sym)
@@ -717,11 +743,118 @@ int FindSym(string sym)
    return(-1);
 }
 
+bool SymbolQuotable(string sym)
+{
+   if(sym == "" || sym == NULL) return(false);
+   if(MarketInfo(sym, MODE_POINT) <= 0.0) return(false);
+   if(MarketInfo(sym, MODE_BID) <= 0.0 && MarketInfo(sym, MODE_ASK) <= 0.0) return(false);
+   return(true);
+}
+
+bool SymbolEnable(string sym)
+{
+   if(!SymbolQuotable(sym)) return(false);
+   return(SymbolSelect(sym, true));
+}
+
+int ScoreEur(string sym)
+{
+   string b;
+   int sc;
+   b = BaseName(sym);
+   if(!EurMatchBase(b)) return(-1);
+   sc = 70;
+   if(b == "EURUSD") sc = 100;
+   else if(StringLen(b) <= 8) sc = 92;
+   if(sym == Symbol()) sc += 2;
+   return(sc);
+}
+
+int ScoreGold(string sym)
+{
+   string b;
+   int sc;
+   b = BaseName(sym);
+   if(!GoldMatchBase(b)) return(-1);
+   sc = 70;
+   if(b == "XAUUSD") sc = 100;
+   else if(b == "GOLD") sc = 94;
+   else if(StringFind(b, "XAU") == 0) sc = 88;
+   if(sym == Symbol()) sc += 2;
+   return(sc);
+}
+
+int ScorePull(string sym)
+{
+   string b;
+   int sc;
+   b = BaseName(sym);
+   if(!PullMatchBase(b)) return(-1);
+   sc = 80;
+   if(b == "US100" || b == "NAS100" || b == "USTEC") sc = 100;
+   else if(b == "ND100" || b == "NASDAQ") sc = 96;
+   if(sym == Symbol()) sc += 2;
+   return(sc);
+}
+
+void PickBrokerSymbol(string &best, int kind)
+{
+   int total;
+   int i;
+   int sc;
+   int bestSc;
+   string s;
+   string cand;
+   bestSc = -1;
+   cand = "";
+   total = SymbolsTotal(false);
+   for(i = 0; i < total; i++)
+   {
+      s = SymbolName(i, false);
+      if(kind == 1) sc = ScoreEur(s);
+      else if(kind == 2) sc = ScoreGold(s);
+      else sc = ScorePull(s);
+      if(sc < 0) continue;
+      if(sc > bestSc)
+      {
+         bestSc = sc;
+         cand = s;
+      }
+      else if(sc == bestSc && cand != "" && StringLen(s) < StringLen(cand))
+         cand = s;
+   }
+   if(cand != "" && SymbolEnable(cand)) best = cand;
+}
+
+void ResolveBrokerSymbols()
+{
+   string chart;
+   chart = Symbol();
+   if(InpUseFX) PickBrokerSymbol(gBrokEur, 1);
+   if(InpUseGold) PickBrokerSymbol(gBrokGold, 2);
+   if(InpUseIndex) PickBrokerSymbol(gBrokPull, 3);
+   if(gBrokGold == "" && IsRegGold(chart) && SymbolEnable(chart)) gBrokGold = chart;
+   if(gBrokEur == "" && IsRegFx(chart) && SymbolEnable(chart)) gBrokEur = chart;
+   if(gBrokPull == "" && IsPullIndex(chart) && SymbolEnable(chart)) gBrokPull = chart;
+   if(!gBrokSymLogged)
+   {
+      Print("IDC_F broker symbols AUTO: EUR=", gBrokEur, " GOLD=", gBrokGold, " PULL=", gBrokPull);
+      if(InpPlan2Whitelist)
+      {
+         if(InpUseFX && gBrokEur == "") Print("IDC_F WARN: EURUSD not found in broker symbols");
+         if(InpUseGold && gBrokGold == "") Print("IDC_F WARN: GOLD/XAU not found");
+         if(InpUseIndex && gBrokPull == "") Print("IDC_F WARN: US100/NAS100/USTEC not found");
+      }
+      gBrokSymLogged = true;
+   }
+}
+
 void EnsureSymbol(string sym)
 {
    if(sym == "" || sym == NULL) return;
    if(FindSym(sym) >= 0) return;
    if(gN >= MAXS) return;
+   SymbolSelect(sym, true);
    if(MarketInfo(sym, MODE_POINT) <= 0.0) return;
    SName[gN] = sym;
    gBarOf[gN] = 0;
@@ -740,15 +873,20 @@ void RefreshSymbols()
    if(IsTesting()) return;
    if(TimeCurrent() - gLastSymRefresh < 30) return;
    gLastSymRefresh = TimeCurrent();
-   total = SymbolsTotal(true);
+   if(InpPlan2Whitelist)
+   {
+      ResolveBrokerSymbols();
+      EnsureSymbol(Symbol());
+      if(gBrokEur != "") EnsureSymbol(gBrokEur);
+      if(gBrokGold != "" && gBrokGold != gBrokEur) EnsureSymbol(gBrokGold);
+      if(gBrokPull != "") EnsureSymbol(gBrokPull);
+      return;
+   }
+   total = SymbolsTotal(false);
    for(i = 0; i < total; i++)
    {
-      s = SymbolName(i, true);
-      if(InpPlan2Whitelist)
-      {
-         if(AllowedPlan2(s)) EnsureSymbol(s);
-      }
-      else if(ClassWanted(ClassOf(s))) EnsureSymbol(s);
+      s = SymbolName(i, false);
+      if(ClassWanted(ClassOf(s))) EnsureSymbol(s);
    }
 }
 
@@ -2398,11 +2536,12 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.12 안2  " + TfNote() + "\n";
+   text = "IDC_F v2.13 안2  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
    text = text + "  learn=" + IntegerToString(gClosed) + "/" + IntegerToString(WarmCount()) + "\n";
+   text = text + "sym E:" + gBrokEur + " G:" + gBrokGold + " P:" + gBrokPull + "\n";
    text = text + "today=" + IntegerToString(gTradesToday) + "/" + IntegerToString(InpMaxTradesDay);
    text = text + " REG=" + IntegerToString(gRegToday) + " pull=" + IntegerToString(gPullToday);
    text = text + "  dayR=" + DoubleToString(gDayR, 2) + "\n";
@@ -2463,7 +2602,7 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.12 self-test OK ", TfNote(), " plan2 REG+PULL");
+   Print("IDC_F v2.13 self-test OK ", TfNote(), " plan2 REG+PULL broker AUTO");
    if(InpDebugLog)
       Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
    else
