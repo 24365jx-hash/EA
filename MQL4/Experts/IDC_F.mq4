@@ -1,5 +1,5 @@
-﻿#property copyright "IDC_F v2.11"
-#property version   "2.11"
+﻿#property copyright "IDC_F v2.12"
+#property version   "2.12"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -32,7 +32,7 @@ input bool   InpCloseAtSessionEnd  = true;         // 세션 종료 시 청산
 input int    InpMinHoldSeconds     = 90;           // 이익 청산 최소 보유 초
 input double InpDailyLossPercent   = 2.0;          // 일일 손실 % (초기잔고)
 input double InpSoftMaxLossPercent = 7.0;          // 소프트 최대손실 % (초기잔고)
-input double InpInitialBalance     = 0;            // 초기잔고 0=첫 잔고, FTMO는 100000
+input double InpInitialBalance     = 0;            // 0=계좌 자동, FTMO만 명시(예 100000)
 input bool   InpUseBlockHours      = true;         // 서버 차단시간 사용
 input int    InpBlockServerStart   = 0;            // 서버 차단 시작 시
 input int    InpBlockServerEnd     = 2;            // 서버 차단 끝 시
@@ -123,6 +123,7 @@ bool     gSelfOK = false;
 datetime gLastSymRefresh = 0;
 bool     gHistWarned = false;
 bool     gDayLocked = false;
+bool     gRiskBaseWarned = false;
 datetime gLastOpenSave = 0;
 string   gOxLine[8];
 int      gOxN = 0;
@@ -643,6 +644,50 @@ int WarmCount()
 {
    if(InpWarmup < 0) return(0);
    return(InpWarmup);
+}
+
+double AccountRefBal()
+{
+   double b;
+   double e;
+   b = AccountBalance();
+   e = AccountEquity();
+   if(e > b) b = e;
+   return(b);
+}
+
+void SyncRiskBaseline()
+{
+   double acct;
+   double softInp;
+   double dayAllow;
+   acct = AccountRefBal();
+   if(acct <= 0.0) return;
+   if(InpInitialBalance > 0.0)
+   {
+      softInp = InpInitialBalance * (1.0 - InpSoftMaxLossPercent / 100.0);
+      if(acct < softInp - 0.01)
+      {
+         gInitBal = acct;
+         if(!gRiskBaseWarned)
+         {
+            Print("IDC_F risk AUTO: account ", DoubleToString(acct, 2),
+                  " vs input init ", DoubleToString(InpInitialBalance, 2), " — account 기준");
+            gRiskBaseWarned = true;
+         }
+         dayAllow = acct * (1.0 - InpDailyLossPercent / 100.0);
+         if(gDayLocked && AccountEquity() >= dayAllow - 0.01) gDayLocked = false;
+      }
+      else
+         gInitBal = InpInitialBalance;
+   }
+   else
+   {
+      if(gInitBal <= 0.0 || acct < gInitBal * 0.20 || gInitBal > acct * 5.0)
+         gInitBal = acct;
+   }
+   if(gDayStartBal <= 0.0 || gDayStartBal > acct * 5.0 || gDayStartBal < acct * 0.20)
+      gDayStartBal = AccountBalance();
 }
 
 bool RiskAllowsEntry()
@@ -2353,7 +2398,7 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.11 안2  " + TfNote() + "\n";
+   text = "IDC_F v2.12 안2  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
@@ -2361,7 +2406,7 @@ void Panel()
    text = text + "today=" + IntegerToString(gTradesToday) + "/" + IntegerToString(InpMaxTradesDay);
    text = text + " REG=" + IntegerToString(gRegToday) + " pull=" + IntegerToString(gPullToday);
    text = text + "  dayR=" + DoubleToString(gDayR, 2) + "\n";
-   text = text + "cut=" + IntegerToString(gPercentile) + "  riskOK=" + (RiskAllowsEntry() ? "Y" : "N") + "\n";
+   text = text + "refBal=" + DoubleToString(gInitBal, 0) + "  riskOK=" + (RiskAllowsEntry() ? "Y" : "N") + "\n";
    text = text + "W " + DoubleToString(gW[0], 2) + " " + DoubleToString(gW[1], 2) + " " + DoubleToString(gW[2], 2) + " " + DoubleToString(gW[3], 2);
    Comment(text);
 }
@@ -2418,15 +2463,14 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.11 self-test OK ", TfNote(), " plan2 REG+PULL");
+   Print("IDC_F v2.12 self-test OK ", TfNote(), " plan2 REG+PULL");
    if(InpDebugLog)
       Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
    else
       Print("IDC_F 진입 O/X 로그 OFF — Inputs에서 InpDebugLog=true 후 재부착");
    InitDefaultWeights();
-   if(InpInitialBalance > 0.0) gInitBal = InpInitialBalance;
    LoadLearn();
-   if(gInitBal <= 0.0) gInitBal = AccountBalance();
+   SyncRiskBaseline();
    LoadOpen();
    RefreshOffset();
    CatchUpDay();
