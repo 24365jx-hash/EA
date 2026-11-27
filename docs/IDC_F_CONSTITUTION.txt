@@ -1,0 +1,19 @@
+# IDC_F 헌법 — 안2「안정 균형」v2.10 완전무결판
+
+EA: IDC_F | MT4 #property strict | MQL4/Experts/IDC_F.mq4
+교수님: 안2 확정 | 최우선: 월 안정 소득 | FTMO 10만 USD
+
+## 전략
+REG(EURUSD·XAUUSD): 세션 VWAP(KST 16:00 앵커 누적) 이탈→M5 복귀, H1Chop. 일 REG≤2.
+PULL(US100계열): M15 임펄스→M5 눌림, H1TrendOnly. 일 PULL≤1, 랏0.24%.
+STAB_GATE: σ(R20)>1.15 또는 3연손 또는 dayR≤-1.2 → PULL OFF (파일 v3 영속).
+일 체결≤3. 학습: gW(REG), gWPull(PULL) 분리. learn v3, open isPull.
+
+## TF
+부착 XAUUSD M5. InpSignalTF=5, InpTrendTF=60, InpStructureTF=15.
+
+## 디버그
+InpDebugLog ON: M5마다 게이트+REG/Pull O/X+verdict.
+
+## 골드 디폴트
+Presets/IDC_F_XAUUSD_M5.set
