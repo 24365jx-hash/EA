@@ -1,5 +1,5 @@
-﻿#property copyright "IDC_F v2.13"
-#property version   "2.13"
+﻿#property copyright "IDC_F v2.14"
+#property version   "2.14"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -75,6 +75,17 @@ input double InpStabStdR           = 1.15;         // STAB_GATE 최근 R 표준�
 input double InpDayPullStopR       = -1.2;          // 당일 누적 R 이하 PULL 중단
 input bool   InpPlan2Whitelist     = true;         // 안2 종목 화이트리스트
 input int    InpVwapBars           = 96;           // REG VWAP 누적 M5 봉 (세션 근사)
+input string InpSecGold            = "----- XAUUSD REG 전용 (0=공통) -----";
+input double InpGoldRegDevAtr      = 0.40;         // 골드 VWAP 이탈 / M5 ATR
+input double InpGoldReclaimAtr     = 0.35;         // 골드 복귀 바 / M5 ATR
+input double InpGoldH1ChopAtr      = 0.32;         // 골드 H1 Chop 허용
+input double InpGoldRiskPercent    = 0.28;         // 골드 REG 위험 % (0=공통)
+input int    InpGoldSlippagePoints = 120;          // 골드 슬리피지 (0=공통)
+input double InpGoldSpreadMedianMult = 3.0;        // 골드 스프/중앙값 (0=공통)
+input double InpGoldSpreadVsSl     = 0.30;         // 골드 스프/SL (0=공통)
+input int    InpGoldSpreadCapPoints = 0;           // 골드 스프 상한 0=자동
+input int    InpGoldChasePoints    = 0;            // 골드 추격 0=자동
+input int    InpGoldScoreCutStart  = 35;           // 골드 점수컷 0=공통
 
 #define MAXS    12
 #define PAT_REG 1
@@ -330,6 +341,54 @@ bool IsRegGold(string sym)
    return(c == 1);
 }
 
+double RegDevAtrFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldRegDevAtr > 0.0) return(InpGoldRegDevAtr);
+   return(InpRegDevAtr);
+}
+
+double ReclaimAtrFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldReclaimAtr > 0.0) return(InpGoldReclaimAtr);
+   return(InpReclaimAtr);
+}
+
+double H1ChopAtrFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldH1ChopAtr > 0.0) return(InpGoldH1ChopAtr);
+   return(InpH1ChopAtr);
+}
+
+double SpreadMedMultFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldSpreadMedianMult > 0.0) return(InpGoldSpreadMedianMult);
+   return(InpSpreadMedianMult);
+}
+
+double SpreadVsSlFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldSpreadVsSl > 0.0) return(InpGoldSpreadVsSl);
+   return(InpSpreadVsSl);
+}
+
+int SlippageFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldSlippagePoints > 0) return(InpGoldSlippagePoints);
+   return(InpSlippagePoints);
+}
+
+double RiskPctRegFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldRiskPercent > 0.0) return(InpGoldRiskPercent);
+   return(InpRiskPercent);
+}
+
+int ScoreCutFor(string sym)
+{
+   if(IsRegGold(sym) && InpGoldScoreCutStart > 0) return(InpGoldScoreCutStart);
+   return(InpScoreCutStart);
+}
+
 int PatternOf(string sym)
 {
    if(InpPlan2Whitelist)
@@ -507,6 +566,11 @@ void EffPoints(string sym, int &sweep, int &buf, int &slmin, int &slmax, int &tr
    if(InpSpreadCapPoints > 0) spreadCap = InpSpreadCapPoints;
    if(InpReclaimMinPoints > 0) reclaim = InpReclaimMinPoints;
    if(InpChasePoints > 0) chase = InpChasePoints;
+   if(cls == 1)
+   {
+      if(InpGoldSpreadCapPoints > 0) spreadCap = InpGoldSpreadCapPoints;
+      if(InpGoldChasePoints > 0) chase = InpGoldChasePoints;
+   }
    if(trStep < 1) trStep = 1;
    if(trStart < trStep) trStart = trStep;
    if(slmax < slmin) slmax = slmin;
@@ -957,7 +1021,7 @@ bool H1Chop(string sym)
    emaPrev = iMA(sym, InpTrendTF, emaP, 0, MODE_EMA, PRICE_CLOSE, shiftBack);
    h1atr = iATR(sym, InpTrendTF, InpAtrPeriod, 1);
    if(ema == 0.0 || emaPrev == 0.0 || h1atr <= 0.0) return(false);
-   return(MathAbs(ema - emaPrev) <= InpH1ChopAtr * h1atr);
+   return(MathAbs(ema - emaPrev) <= H1ChopAtrFor(sym) * h1atr);
 }
 
 datetime SessionStartKst()
@@ -1092,7 +1156,7 @@ void PushScore(double s)
    gScore[MAXSCORE - 1] = s;
 }
 
-double ScoreThreshold()
+double ScoreThresholdPct(int pct)
 {
    double tmp[MAXSCORE];
    int n;
@@ -1101,7 +1165,7 @@ double ScoreThreshold()
    int idx;
    double z;
    if(gClosed < WarmCount()) return(-1.0);
-   if(gPercentile <= 0 || gScoreN < 10) return(-1.0);
+   if(pct <= 0 || gScoreN < 10) return(-1.0);
    n = gScoreN;
    for(i = 0; i < n; i++) tmp[i] = gScore[i];
    for(i = 0; i < n; i++)
@@ -1116,20 +1180,34 @@ double ScoreThreshold()
          }
       }
    }
-   idx = (int)MathFloor((gPercentile / 100.0) * n);
+   idx = (int)MathFloor((pct / 100.0) * n);
    if(idx < 0) idx = 0;
    if(idx >= n) idx = n - 1;
    return(tmp[idx]);
 }
 
-bool GateScore(double score)
+double ScoreThreshold()
+{
+   return(ScoreThresholdPct(gPercentile));
+}
+
+bool GateScoreSym(string sym, double score)
 {
    double th;
+   int pct;
    if(gClosed < WarmCount()) return(true);
-   th = ScoreThreshold();
+   pct = gPercentile;
+   if(IsRegGold(sym) && InpGoldScoreCutStart > 0 && InpGoldScoreCutStart > pct)
+      pct = InpGoldScoreCutStart;
+   th = ScoreThresholdPct(pct);
    if(th < 0.0) return(true);
    if(score + 1e-12 < th) return(false);
    return(true);
+}
+
+bool GateScore(double score)
+{
+   return(GateScoreSym(Symbol(), score));
 }
 
 bool SlAccept(string sym, int dir, double entryPx, double sl, int slmin, int slmax)
@@ -1226,7 +1304,7 @@ int CollectReg(string sym,
    if(closePx <= 0.0 || hi1 <= 0.0 || lo1 <= 0.0) { OxLine(RegOx(0)); return(0); }
    atr = iATR(sym, InpSignalTF, InpAtrPeriod, 1);
    if(atr <= 0.0) { OxLine(RegOx(0)); return(0); }
-   dev = InpRegDevAtr * atr;
+   dev = RegDevAtrFor(sym) * atr;
    d = 0;
    if(lo1 < vwap - dev && closePx > vwap) d = 1;
    else if(hi1 > vwap + dev && closePx < vwap) d = -1;
@@ -1238,7 +1316,7 @@ int CollectReg(string sym,
    range = hi1 - lo1;
    if(range < 0.0) range = 0.0;
    reclaimPts = (d > 0) ? (closePx - vwap) / point : (vwap - closePx) / point;
-   quality = (range >= InpReclaimAtr * atr) || (reclaimPts >= reclaimMin);
+   quality = (range >= ReclaimAtrFor(sym) * atr) || (reclaimPts >= reclaimMin);
    if(!quality) { OxLine(RegOx(3)); return(0); }
    reached = 3;
    px = (d > 0) ? MarketInfo(sym, MODE_ASK) : MarketInfo(sym, MODE_BID);
@@ -1254,10 +1332,10 @@ int CollectReg(string sym,
    reached = 5;
    spr = (int)MarketInfo(sym, MODE_SPREAD);
    if(spCap > 0 && spr > spCap) { OxLine(RegOx(6)); return(0); }
-   if(InpSpreadVsSl > 0.0)
+   if(SpreadVsSlFor(sym) > 0.0)
    {
       riskPts = (int)MathRound(MathAbs(px - slp) / point);
-      if(riskPts > 0 && spr > riskPts * InpSpreadVsSl) { OxLine(RegOx(6)); return(0); }
+      if(riskPts > 0 && spr > riskPts * SpreadVsSlFor(sym)) { OxLine(RegOx(6)); return(0); }
    }
    reached = 7;
    depPts = (d > 0) ? (vwap - ext) / point : (ext - vwap) / point;
@@ -1537,7 +1615,7 @@ bool SpreadOkMedian(int slot, string sym)
    spr = (int)MarketInfo(sym, MODE_SPREAD);
    med = MedianSpread(slot);
    PushSpread(slot, spr);
-   if(med > 0 && InpSpreadMedianMult > 0.0 && spr > med * InpSpreadMedianMult) return(false);
+   if(med > 0 && SpreadMedMultFor(sym) > 0.0 && spr > med * SpreadMedMultFor(sym)) return(false);
    return(true);
 }
 
@@ -1677,7 +1755,7 @@ int SendMarket(string sym, int dir, double lot, double sl, double closePx, int c
       }
       if(!SlAccept(sym, dir, price, sl, slmin, slmax)) { DLog(sym, "sl moved"); return(-1); }
       if(AccountFreeMarginCheck(sym, cmd, lot) < 0.0) { DLog(sym, "margin at send"); return(-1); }
-      ticket = OrderSend(sym, cmd, lot, price, InpSlippagePoints, sl, 0, "IDC_F", InpMagic, 0,
+      ticket = OrderSend(sym, cmd, lot, price, SlippageFor(sym), sl, 0, "IDC_F", InpMagic, 0,
                          (cmd == OP_BUY) ? clrBlue : clrRed);
       if(ticket > 0)
       {
@@ -1687,7 +1765,7 @@ int SendMarket(string sym, int dir, double lot, double sl, double closePx, int c
             {
                Print("IDC_F naked stop, closing ", IntegerToString(ticket), " err=", IntegerToString(GetLastError()));
                price = (cmd == OP_BUY) ? MarketInfo(sym, MODE_BID) : MarketInfo(sym, MODE_ASK);
-               OrderClose(ticket, lot, NormalizeDouble(price, digits), InpSlippagePoints, clrYellow);
+               OrderClose(ticket, lot, NormalizeDouble(price, digits), SlippageFor(sym), clrYellow);
                return(-1);
             }
          }
@@ -2265,7 +2343,7 @@ bool TryEntry(string sym, int slot)
    {
       for(s = 1; s < n; s++) if(score[s] > score[pick]) pick = s;
    }
-   if(!GateScore(score[pick]))
+   if(!GateScoreSym(sym, score[pick]))
    {
       FlushOx(sym, "진입X 점수 " + DoubleToString(score[pick], 2));
       for(s = 0; s < n; s++) PushScore(score[s]);
@@ -2288,6 +2366,7 @@ bool TryEntry(string sym, int slot)
    if(dist <= 0) { FlushOx(sym, "진입X 손절거리"); return(false); }
    riskPct = InpRiskPercent;
    if(tag[pick] == "PULL") riskPct = InpPullRiskPercent;
+   else if(IsRegGold(sym)) riskPct = RiskPctRegFor(sym);
    else if(gClosed >= WarmCount())
    {
       tilt = 0.80 + 0.40 * score[pick];
@@ -2350,7 +2429,7 @@ bool CloseTicket(int ticket)
       if(OrderCloseTime() != 0) return(true);
       price = (type == OP_BUY) ? MarketInfo(sym, MODE_BID) : MarketInfo(sym, MODE_ASK);
       price = NormalizeDouble(price, digits);
-      if(OrderClose(ticket, lot, price, InpSlippagePoints, clrYellow)) return(true);
+      if(OrderClose(ticket, lot, price, SlippageFor(sym), clrYellow)) return(true);
       e = GetLastError();
       Print("IDC_F close fail ", IntegerToString(ticket), " err=", IntegerToString(e));
       if(e == 146 || e == 128 || e == 129 || e == 135 || e == 136 || e == 138)
@@ -2536,7 +2615,7 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.13 안2  " + TfNote() + "\n";
+   text = "IDC_F v2.14 GOLD-REG  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
@@ -2602,7 +2681,7 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.13 self-test OK ", TfNote(), " plan2 REG+PULL broker AUTO");
+   Print("IDC_F v2.14 self-test OK ", TfNote(), " plan2 REG+PULL broker AUTO gold REG");
    if(InpDebugLog)
       Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
    else
