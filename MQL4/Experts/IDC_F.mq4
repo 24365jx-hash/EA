@@ -1,5 +1,5 @@
-﻿#property copyright "IDC_F v2.14"
-#property version   "2.14"
+﻿#property copyright "IDC_F v2.15"
+#property version   "2.15"
 #property strict
 #property description "IDC_F 안2 REG+PULL. spec: docs/IDC_F_CONSTITUTION.txt"
 
@@ -30,6 +30,10 @@ input int    InpSessionEndHour     = 0;            // 거래 끝 시 (한국시�
 input int    InpSessionEndMin      = 30;           // 거래 끝 분
 input bool   InpCloseAtSessionEnd  = true;         // 세션 종료 시 청산
 input int    InpMinHoldSeconds     = 90;           // 이익 청산 최소 보유 초
+input string InpSecTrail           = "----- 트레일 (포인트) -----";
+input int    InpTrailStartPoints   = 150;          // 유리 N포인트부터 SL 잠금 (5자리 EUR 약 15핍)
+input int    InpTrailStepPoints    = 15;           // SL 당김 간격 포인트
+input int    InpStandOffPoints     = 15;           // 잠금 시 진입가 이격 (0=스텝과 동일)
 input double InpDailyLossPercent   = 2.0;          // 일일 손실 % (초기잔고)
 input double InpSoftMaxLossPercent = 7.0;          // 소프트 최대손실 % (초기잔고)
 input double InpInitialBalance     = 0;            // 0=계좌 자동, FTMO만 명시(예 100000)
@@ -43,9 +47,6 @@ input int    InpWarmup             = 40;           // 학습 시작 전 청산 �
 input double InpBaselineR          = 0.35;         // 가중치 기준 R
 input double InpLearnRate          = 0.06;         // 학습 속도
 input int    InpScoreCutStart      = 30;           // 점수 커트 시작 백분위 0~80
-input double InpTrailTight         = 0.80;         // 좁은 트레일 시작 배수
-input double InpTrailWide          = 1.30;         // 넓은 트레일 시작 배수
-input int    InpStandOffPoints     = 0;            // 트레일 이격 0=스텝과 동일
 input int    InpBrokerSyncMult     = 5;            // 브로커 손절 동기화 스텝 배수
 input int    InpMaxModifies        = 800;          // 하루 손절 수정 상한
 input int    InpMaxTickGap         = 30;           // 틱 공백 초
@@ -60,8 +61,6 @@ input int    InpSweepMinPoints     = 0;            // 스윕 최소 0=등급 자
 input int    InpSlBufferPoints     = 0;            // 손절 버퍼 0=등급 자동
 input int    InpSlMinPoints        = 0;            // 손절 최소 0=등급 자동
 input int    InpSlMaxPoints        = 0;            // 손절 최대 0=등급 자동
-input int    InpTrailStartPoints   = 0;            // 트레일 시작 0=등급 자동
-input int    InpTrailStepPoints    = 0;            // 트레일 스텝 0=등급 자동
 input int    InpSpreadCapPoints    = 0;            // 스프레드 상한 0=등급 자동
 input int    InpReclaimMinPoints   = 0;            // 복귀 최소 0=등급 자동
 input int    InpChasePoints        = 0;            // 추격 한도 0=등급 자동
@@ -1723,11 +1722,23 @@ int PickPreset()
    return(best);
 }
 
-double PresetFactor(int preset)
+void TrailPoints(string sym, int &trStart, int &trStep)
 {
-   if(preset == 0) return(InpTrailTight);
-   if(preset == 2) return(InpTrailWide);
-   return(1.0);
+   int sweep;
+   int buf;
+   int slmin;
+   int slmax;
+   int spCap;
+   int reclaim;
+   int chase;
+   trStart = InpTrailStartPoints;
+   trStep = InpTrailStepPoints;
+   if(trStart > 0 && trStep > 0) return;
+   EffPoints(sym, sweep, buf, slmin, slmax, trStart, trStep, spCap, reclaim, chase);
+   if(InpTrailStartPoints > 0) trStart = InpTrailStartPoints;
+   if(InpTrailStepPoints > 0) trStep = InpTrailStepPoints;
+   if(trStep < 1) trStep = 1;
+   if(trStart < trStep) trStart = trStep;
 }
 
 int SendMarket(string sym, int dir, double lot, double sl, double closePx, int chase, int slmin, int slmax)
@@ -2506,16 +2517,7 @@ void ManageTicket(int ticket)
    string sym;
    int idx;
    int type;
-   int preset;
-   int sweep;
-   int buf;
-   int slmin;
-   int slmax;
-   int trS;
    int trStep;
-   int spCap;
-   int reclaimMin;
-   int chase;
    int useStart;
    int stand;
    int profitPts;
@@ -2572,10 +2574,7 @@ void ManageTicket(int ticket)
    }
    held = (int)(TimeCurrent() - OrderOpenTime());
    if(InpMinHoldSeconds > 0 && held < InpMinHoldSeconds) return;
-   preset = gOpenPreset[idx];
-   EffPoints(sym, sweep, buf, slmin, slmax, trS, trStep, spCap, reclaimMin, chase);
-   useStart = (int)MathRound(trS * PresetFactor(preset));
-   if(useStart < trStep) useStart = trStep;
+   TrailPoints(sym, useStart, trStep);
    stand = InpStandOffPoints;
    lock = LockPoints(useStart, trStep, stand, profitPts);
    if(lock < 0) return;
@@ -2615,7 +2614,7 @@ void ManageAll()
 void Panel()
 {
    string text;
-   text = "IDC_F v2.14 GOLD-REG  " + TfNote() + "\n";
+   text = "IDC_F v2.15 GOLD-REG  " + TfNote() + "\n";
    text = text + "KST " + TimeToString(KstNow(), TIME_DATE | TIME_MINUTES);
    text = text + "  session=" + (InSession() ? "ON" : "OFF");
    text = text + "  STAB=" + (gStabGate ? "ON" : "OFF");
@@ -2681,7 +2680,7 @@ int OnInit()
       Print("IDC_F self-test FAILED. No trading.");
       return(INIT_FAILED);
    }
-   Print("IDC_F v2.14 self-test OK ", TfNote(), " plan2 REG+PULL broker AUTO gold REG");
+   Print("IDC_F v2.15 self-test OK ", TfNote(), " plan2 REG+PULL broker AUTO gold REG");
    if(InpDebugLog)
       Print("IDC_F 진입 O/X 로그 ON — 신호TF=", IntegerToString(InpSignalTF), "분 봉마다 Experts");
    else
